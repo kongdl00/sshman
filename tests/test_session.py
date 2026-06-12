@@ -74,16 +74,59 @@ class TestSession:
         assert d["jumphost"] == ""
         assert d["auto_log"] is False
 
+    def test_to_ssh_args_password_not_included(self):
+        """to_ssh_args() never includes password for security."""
+        s = Session(name="test", host="10.0.0.1", user="root", password="supersecret")
+        args = s.to_ssh_args()
+        assert "supersecret" not in args
+
+    def test_to_ssh_args_no_identity_file(self):
+        """to_ssh_args() omits -i when identity_file is empty."""
+        s = Session(name="test", host="10.0.0.1", user="root")
+        args = s.to_ssh_args()
+        assert "-i" not in args
+
+    def test_to_ssh_args_no_keepalive(self):
+        """to_ssh_args() omits ServerAliveInterval when keepalive is 0."""
+        s = Session(name="test", host="10.0.0.1", user="root")
+        args = s.to_ssh_args()
+        assert "-o" not in args
+
+    def test_from_dict_partial(self):
+        """from_dict() fills defaults for missing keys."""
+        d = {"name": "test", "host": "10.0.0.1", "user": "admin"}
+        s = Session.from_dict(d)
+        assert s.name == "test"
+        assert s.host == "10.0.0.1"
+        assert s.user == "admin"
+        assert s.port == 22
+        assert s.password == ""
+        assert s.tags == []
+        assert s.jumphost == ""
+        assert s.tunnels == []
+        assert s.auto_log is False
+        assert s.keepalive == 0
+
     def test_from_dict_roundtrip(self):
         """from_dict(to_dict(session)) produces identical session."""
         original = Session(
-            name="test", host="10.0.0.1", user="root", password="pw",
-            tags=["a", "b"], tunnels=[{"type": "local", "local_port": 8080,
-            "remote_host": "127.0.0.1", "remote_port": 80}]
+            name="test", host="10.0.0.1", user="root", port=2222,
+            password="pw", identity_file="~/.ssh/id_ed25519",
+            tags=["a", "b"], jumphost="bastion",
+            tunnels=[{"type": "local", "local_port": 8080,
+                      "remote_host": "127.0.0.1", "remote_port": 80}],
+            notes="my server", auto_log=True, keepalive=30,
         )
         restored = Session.from_dict(original.to_dict())
         assert restored.name == original.name
         assert restored.host == original.host
+        assert restored.port == original.port
+        assert restored.user == original.user
         assert restored.password == original.password
+        assert restored.identity_file == original.identity_file
         assert restored.tags == original.tags
+        assert restored.jumphost == original.jumphost
         assert restored.tunnels == original.tunnels
+        assert restored.notes == original.notes
+        assert restored.auto_log == original.auto_log
+        assert restored.keepalive == original.keepalive
