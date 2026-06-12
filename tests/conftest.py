@@ -5,17 +5,16 @@ import pytest
 
 
 @pytest.fixture
-def tmp_config_dir():
+def tmp_config_dir(monkeypatch):
     """Create a temporary .sshman directory for isolated testing."""
     tmp = Path(tempfile.mkdtemp(prefix="sshman_test_"))
     sshman_dir = tmp / ".sshman"
     sshman_dir.mkdir(parents=True)
-    old_home = Path.home()
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(Path, "home", lambda: tmp)
-    yield sshman_dir
-    monkeypatch.undo()
-    shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        yield sshman_dir
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 @pytest.fixture
@@ -49,3 +48,11 @@ settings:
   connect_timeout: 10
   master_password_salt: dGVzdF9zYWx0
 """
+
+
+@pytest.fixture
+def parsed_sample_config(sample_yaml_config):
+    """YAML-parsed version of sample_yaml_config."""
+    import yaml
+
+    return yaml.safe_load(sample_yaml_config)

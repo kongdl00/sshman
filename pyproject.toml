@@ -7,6 +7,7 @@ name = "sshman"
 version = "0.1.0"
 description = "SSH session management CLI tool"
 requires-python = ">=3.10"
+license = {text = "MIT"}
 dependencies = [
     "click>=8.0",
     "pyyaml>=6.0",
@@ -23,3 +24,10 @@ dev = [
 
 [project.scripts]
 sshman = "sshman.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["sshman"]
+exclude = ["tests*", "docs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
