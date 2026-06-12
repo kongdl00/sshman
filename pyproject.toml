@@ -26,8 +26,12 @@ dev = [
 sshman = "sshman.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["sshman"]
+where = ["."]
+include = ["sshman*"]
 exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-dir]
+sshman = "sshman"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

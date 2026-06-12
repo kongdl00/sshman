@@ -28,8 +28,6 @@ python3 -m pytest tests/ -v --cov=sshman --cov-report=term-missing
 sshman --help
 ```
 
-**Important:** After `pip install -e .`, the editable install `.pth` file may point to the inner `sshman/sshman/` directory instead of the project root, causing `ModuleNotFoundError: No module named 'sshman'`. If that happens, manually edit `venv/lib/python3.*/site-packages/__editable__.sshman-*.pth` to contain the project root (`/path/to/sshman`) instead of the package directory.
-
 ## Architecture
 
 The project follows a **layered architecture** with strict separation: core modules have no CLI dependency, command modules bridge Click ↔ core, CLI entry point is wiring-only.
