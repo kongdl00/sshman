@@ -32,7 +32,10 @@ class ConfigManager:
 
         self.config_file = self.config_dir / "config.enc"
         self.temp_file = self.config_dir / ".config.tmp"
-        self.log_dir = Path.home() / ".sshman" / "logs"
+        self.log_dir = self.config_dir / "logs"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_permissions(self.log_dir, 0o700)
+        self.settings = dict(self.DEFAULT_SETTINGS)
         self.sessions: list[Session] = []
 
     # ---- plaintext I/O (temp file only, never persists unencrypted) ----
@@ -42,12 +45,12 @@ class ConfigManager:
         if not self.temp_file.exists():
             return {
                 "sessions": [],
-                "settings": dict(self.DEFAULT_SETTINGS),
+                "settings": dict(self.settings),
             }
         with open(self.temp_file, "r", encoding="utf-8") as fh:
             return yaml.safe_load(fh) or {
                 "sessions": [],
-                "settings": dict(self.DEFAULT_SETTINGS),
+                "settings": dict(self.settings),
             }
 
     def _save_plain(self, config: dict) -> None:
@@ -60,7 +63,7 @@ class ConfigManager:
         """Build config dict from current sessions + default settings."""
         return {
             "sessions": [s.to_dict() for s in self.sessions],
-            "settings": dict(self.DEFAULT_SETTINGS),
+            "settings": dict(self.settings),
         }
 
     # ---- encrypted file I/O ----
@@ -114,17 +117,17 @@ class ConfigManager:
         self.sessions = [Session.from_dict(s) for s in config.get("sessions", [])]
         settings = config.get("settings", {})
         if settings:
-            for key in self.DEFAULT_SETTINGS:
+            for key in self.settings:
                 if key in settings:
-                    self.DEFAULT_SETTINGS[key] = settings[key]
+                    self.settings[key] = settings[key]
 
     def save(self, master_password: str) -> None:
         """Save current sessions to plain temp, then encrypt."""
-        salt = self.DEFAULT_SETTINGS.get("master_password_salt", "")
+        salt = self.settings.get("master_password_salt", "")
         if not salt:
             raise ValueError("master_password_salt not set")
         config = self._make_config_dict()
-        config["settings"] = dict(self.DEFAULT_SETTINGS)
+        config["settings"] = dict(self.settings)
         self._save_plain(config)
         self.encrypt_file(master_password)
 

@@ -94,6 +94,27 @@ class TestEncryptDecryptFile:
         assert b"10.0.0.1" not in raw
 
 
+class TestLoadSaveLifecycle:
+    def test_load_save_lifecycle(self, tmp_config_dir, sample_session_dict):
+        """load() and save() correctly round-trip through encryption."""
+        cm = ConfigManager(config_dir=tmp_config_dir)
+        # Setup: write salt file
+        salt_file = tmp_config_dir / ".salt"
+        salt_file.write_text("dGVzdF9zYWx0")
+        cm.settings["master_password_salt"] = "dGVzdF9zYWx0"
+        # Create session and save
+        s = Session.from_dict(sample_session_dict)
+        cm.sessions.append(s)
+        cm.save("testpassword")
+        assert cm.config_file.exists()
+        assert not cm.temp_file.exists()
+        # Load in a new ConfigManager
+        cm2 = ConfigManager(config_dir=tmp_config_dir)
+        cm2.load("testpassword")
+        assert len(cm2.sessions) == 1
+        assert cm2.sessions[0].name == "test-server"
+
+
 class TestSessionCRUD:
     def test_add_session(self, tmp_config_dir, sample_session_dict):
         cm = ConfigManager(config_dir=tmp_config_dir)
@@ -143,6 +164,7 @@ class TestSessionCRUD:
         cm.sessions = [
             Session(name="prod-web", host="10.0.0.1", user="root", notes="production"),
             Session(name="stage-db", host="10.0.0.2", user="root", notes="staging"),
+            Session(name="dev-cache", host="10.0.0.100", user="root", notes="development"),
         ]
         results = cm.list_sessions(keyword="web")
         assert len(results) == 1
@@ -150,3 +172,6 @@ class TestSessionCRUD:
         results = cm.list_sessions(keyword="staging")
         assert len(results) == 1
         assert results[0].name == "stage-db"
+        results = cm.list_sessions(keyword="100")
+        assert len(results) == 1
+        assert results[0].name == "dev-cache"
