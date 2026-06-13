@@ -98,6 +98,16 @@ sshman clone prod-web-01 --as prod-web-02
 sshman clone prod-web-01 --as prod-web-03 --host 10.0.1.103 --port 2222
 ```
 
+### 重命名会话
+
+```bash
+sshman rename <旧名称> <新名称>
+# 示例
+sshman rename sdp_admin_test sdp-admin-test
+```
+
+新名称不能与已有会话重复。
+
 ### 删除会话
 
 ```bash
@@ -420,6 +430,7 @@ sshman crypto encrypt                     # 加密回 config.enc
 | `add` | `--name --host --port --user --password --identity-file --tags --group --notes --keychain --config-dir` | 添加会话 |
 | `list` | `--tag --group --keyword --detail --config-dir` | 列出会话 |
 | `edit` | 同 add 字段 + `--keychain` + `--keepalive` | 编辑会话 |
+| `rename` | `<old_name> <new_name> --config-dir` | 重命名会话 |
 | `clone` | `<name> --as <new> [--host --port --user] --config-dir` | 克隆会话 |
 | `remove` | `<name> [--force] --config-dir` | 删除会话 |
 | `connect` | `<name> [--log/--no-log] [--no-tunnels] --config-dir` | 连接会话 |
