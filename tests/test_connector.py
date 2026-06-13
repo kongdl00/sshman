@@ -1,5 +1,6 @@
 from unittest.mock import patch, MagicMock
-from sshman.core.connector import SSHConnector
+import pexpect
+from sshman.core.connector import SSHConnector, SSHConnectionError
 from sshman.core.session import Session
 
 
@@ -63,5 +64,64 @@ class TestSSHConnectorConnect:
         session = Session(name="test", host="10.0.0.1", user="root", password="secret123")
         connector = SSHConnector(session)
         connector.connect()
-        # The password is on the session object — _handle_interactive_login will use it
         assert connector.session.password == "secret123"
+
+
+class TestHandleInteractiveLogin:
+    def test_login_sends_password_and_returns_without_consuming_output(self):
+        """After password is sent, function returns without calling
+        expect() for shell prompt — preserving MOTD/prompt in buffer."""
+        session = Session(name="test", host="10.0.0.1", user="root", password="secret")
+        connector = SSHConnector(session)
+        mock_child = MagicMock()
+        mock_child.isalive.return_value = True
+        # First expect() matches password prompt, then we return
+        mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
+        connector.child = mock_child
+
+        connector._handle_interactive_login()
+
+        # Should have matched password prompt
+        mock_child.expect.assert_called_once()
+        # Should have sent the password
+        mock_child.sendline.assert_called_once_with("secret")
+        # Should have checked that child is alive
+        mock_child.isalive.assert_called_once()
+        # CRITICAL: should NOT have called expect() a second time
+        # (which would consume MOTD/banners/prompt from the buffer)
+        assert mock_child.expect.call_count == 1
+
+    def test_login_hostkey_accepted(self):
+        """Host key prompt is accepted with 'yes'."""
+        session = Session(name="test", host="10.0.0.1", user="root", password="p")
+        connector = SSHConnector(session)
+        mock_child = MagicMock()
+        mock_child.isalive.return_value = True
+        # First: host key prompt, second: password prompt
+        mock_child.expect.side_effect = [
+            SSHConnector.PATTERN_HOSTKEY,
+            SSHConnector.PATTERN_PASSWORD,
+        ]
+        connector.child = mock_child
+
+        connector._handle_interactive_login()
+
+        mock_child.sendline.assert_any_call("yes")
+        mock_child.sendline.assert_any_call("p")
+        assert mock_child.expect.call_count == 2
+
+    def test_login_dead_after_password_raises(self):
+        """If child dies after sending password, raise SSHConnectionError."""
+        session = Session(name="test", host="10.0.0.1", user="root", password="pw")
+        connector = SSHConnector(session)
+        mock_child = MagicMock()
+        mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
+        mock_child.isalive.return_value = False
+        connector.child = mock_child
+
+        try:
+            connector._handle_interactive_login()
+        except SSHConnectionError as e:
+            assert "connection lost" in str(e).lower()
+        else:
+            raise AssertionError("Expected SSHConnectionError")

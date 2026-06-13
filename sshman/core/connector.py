@@ -1,4 +1,5 @@
 import os
+import time
 import pexpect
 
 from sshman.core.session import Session
@@ -79,7 +80,13 @@ class SSHConnector:
         return self.child
 
     def _handle_interactive_login(self) -> None:
-        """Process interactive prompts until shell ready or error."""
+        """Process interactive prompts until authenticated.
+
+        After sending the password, we do NOT call expect() to match a shell
+        prompt — that would consume MOTD/banners/prompt from pexpect's buffer,
+        leaving the user staring at a blank terminal in interact() mode.
+        Instead we sleep briefly and check that the child is still alive.
+        """
         assert self.child is not None
 
         while True:
@@ -97,19 +104,19 @@ class SSHConnector:
                         f"Password for {self.session.user}@{self.session.host}: "
                     )
                 self.child.sendline(password)
-                try:
-                    idx2 = self.child.expect(
-                        [r"[$#]\s*$", r"(?i)password:", r"(?i)permission denied", pexpect.EOF],
-                        timeout=5,
+
+                # Wait briefly for SSH to establish the session.
+                # We intentionally avoid expect() here — any output
+                # (MOTD, last login, shell prompt) must stay in the buffer
+                # so the user sees it when interact() takes over.
+                time.sleep(0.8)
+
+                if not self.child.isalive():
+                    raise SSHConnectionError(
+                        f"SSH connection lost after authentication — "
+                        f"check credentials for {self.session.user}@{self.session.host}"
                     )
-                    if idx2 == 0:
-                        return  # got shell prompt — done
-                    elif idx2 == 1:
-                        raise SSHConnectionError("authentication failed — wrong password")
-                    elif idx2 in (2, 3):
-                        raise SSHConnectionError("authentication failed — permission denied")
-                except pexpect.TIMEOUT:
-                    return  # assume shell ready
+                return
 
             elif idx == self.PATTERN_EOF:
                 raise SSHConnectionError(
