@@ -170,10 +170,9 @@ class SSHConnector:
         """Hand control to the user for interactive shell session.
 
         When auto_log is enabled we run our own select()-based I/O loop
-        instead of calling pexpect.interact().  Every approach built on
-        pexpect's interact() — logfile, logfile_read, output_filter —
-        ultimately calls flush() inside the select loop, which blocks on
-        APFS and freezes the terminal.
+        that reads through pexpect (so its internal buffer stays in sync)
+        but writes output to the terminal and log directly via os.write,
+        bypassing pexpect's logfile/logfile_read flush() path entirely.
         """
         if self.child is None:
             raise SSHConnectionError("not connected — call connect() first")
@@ -192,6 +191,9 @@ class SSHConnector:
         stdin_fd = sys.stdin.fileno()
         stdout_fd = sys.stdout.fileno()
 
+        # Drain any output pexpect already buffered during login handshake
+        self._drain_pexpect_buffer(stdout_fd, log_fh)
+
         old_tc = termios.tcgetattr(stdin_fd)
         tty.setraw(stdin_fd)
 
@@ -199,22 +201,39 @@ class SSHConnector:
             while True:
                 r, _, _ = select.select([child_fd, stdin_fd], [], [])
                 if child_fd in r:
-                    data = os.read(child_fd, 4096)
-                    if not data:          # child closed — session ended
+                    try:
+                        data = self.child.read_nonblocking(size=4096, timeout=0)
+                    except pexpect.EOF:
                         break
-                    os.write(stdout_fd, data)
-                    log_fh.write(data.decode("utf-8", errors="replace"))
-                    log_fh.flush()        # persist promptly for long sessions
+                    if data:
+                        data_bytes = data.encode("utf-8", errors="replace")
+                        os.write(stdout_fd, data_bytes)
+                        log_fh.write(data)
+                        log_fh.flush()
                 if stdin_fd in r:
                     data = os.read(stdin_fd, 4096)
                     if not data:
-                        # raw-mode tty may return 0 on spurious readiness;
-                        # never break the loop for stdin — only child EOF ends it
                         continue
                     os.write(child_fd, data)
         finally:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tc)
             log_fh.close()
+
+    def _drain_pexpect_buffer(self, stdout_fd: int, log_fh) -> None:
+        """Flush any data pexpect already read into its internal buffer."""
+        while True:
+            try:
+                data = self.child.read_nonblocking(size=4096, timeout=0)
+            except pexpect.EOF:
+                return
+            except pexpect.TIMEOUT:
+                return
+            if not data:
+                return
+            data_bytes = data.encode("utf-8", errors="replace")
+            os.write(stdout_fd, data_bytes)
+            log_fh.write(data)
+            log_fh.flush()
 
     def close(self) -> None:
         """Close the SSH connection cleanly."""

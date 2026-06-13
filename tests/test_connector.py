@@ -180,6 +180,8 @@ class TestAutoLogInteract:
 
     @patch("sys.stdout", new=MagicMock())
     @patch("sys.stdin", new=MagicMock())
+    @patch("pexpect.TIMEOUT", new=Exception("TIMEOUT"))
+    @patch("sshman.core.connector.SSHConnector._drain_pexpect_buffer")
     @patch("select.select")
     @patch("os.read")
     @patch("os.write")
@@ -188,11 +190,13 @@ class TestAutoLogInteract:
     @patch("tty.setraw")
     def test_interact_with_auto_log_own_loop(self, mock_setraw, mock_tcset,
                                               mock_tcget, mock_write,
-                                              mock_read, mock_select, tmp_path):
+                                              mock_read, mock_select,
+                                              mock_drain, tmp_path):
+        """When auto_log is on, reads via pexpect + writes log, no freeze."""
         import sys
         sys.stdin.fileno.return_value = 0
         sys.stdout.fileno.return_value = 1
-        """When auto_log is on, runs custom select loop and writes log."""
+
         session = Session(name="test", host="10.0.0.1", user="root",
                           auto_log=True)
         connector = SSHConnector(session)
@@ -202,27 +206,18 @@ class TestAutoLogInteract:
         mock_child.child_fd = 5
         connector.child = mock_child
 
-        # Simulate: child sends data, then EOF on child (session ends)
-        call_count = [0]
-
-        def fake_select(rlist, wlist, xlist, timeout=None):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return ([5], [], [])  # child_fd has data
-            if call_count[0] == 2:
-                return ([0], [], [])  # stdin briefly ready (spurious — skipped)
-            return ([5], [], [])      # child_fd has EOF (break)
-
-        mock_select.side_effect = fake_select
-
-        # child data → OK, stdin (spurious→skip) → child EOF → break
-        mock_read.side_effect = [b"hello from server\n", b"", b""]
+        # select: child_fd has data, then EOF
+        mock_select.side_effect = [([5], [], []), ([5], [], [])]
+        # child output, then EOF (as exception instance)
+        mock_child.read_nonblocking.side_effect = [
+            "hello from server\n", pexpect.EOF("session ended"),
+        ]
 
         connector.interact()
 
-        # Log file should contain the child's output
         log_content = log_path.read_text()
         assert "hello from server" in log_content
+        mock_write.assert_any_call(1, b"hello from server\n")
 
         # Terminal should have received the data
         mock_write.assert_any_call(1, b"hello from server\n")  # stdout_fd=1
