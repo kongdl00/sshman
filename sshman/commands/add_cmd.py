@@ -14,11 +14,12 @@ from sshman.core.session import Session
 @click.option("--keychain", is_flag=True, help="Store SSH password in system keychain instead of config")
 @click.option("--identity-file", default="", help="Path to SSH private key")
 @click.option("--tags", default="", help="Comma-separated tags (e.g. prod,web)")
+@click.option("--group", default="", help="Session group (e.g. production, staging)")
 @click.option("--notes", default="", help="Optional notes")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
 def add_cmd(
     name: str, host: str, port: int, user: str, password: str,
-    identity_file: str, tags: str, notes: str, keychain: bool,
+    identity_file: str, tags: str, group: str, notes: str, keychain: bool,
     config_dir: str | None,
 ) -> None:
     """Add a new SSH session interactively."""
@@ -52,6 +53,7 @@ def add_cmd(
         password=stored_password,
         identity_file=identity_file,
         tags=tag_list,
+        group=group,
         notes=notes,
     )
     cm.sessions.append(session)

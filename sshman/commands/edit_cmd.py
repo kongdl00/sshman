@@ -14,14 +14,15 @@ from sshman.core.session import Session
 @click.option("--keychain", is_flag=True, help="Store SSH password in system keychain instead of config")
 @click.option("--identity-file", default=None, help="New SSH private key path")
 @click.option("--tags", default=None, help="New tags (comma-separated, replaces all)")
+@click.option("--group", default=None, help="New session group")
 @click.option("--notes", default=None, help="New notes")
 @click.option("--keepalive", type=int, default=None, help="New keepalive interval")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
 def edit_cmd(
     name: str, host: str | None, port: int | None, user: str | None,
     password: str | None, identity_file: str | None, tags: str | None,
-    notes: str | None, keepalive: int | None, keychain: bool,
-    config_dir: str | None,
+    group: str | None, notes: str | None, keepalive: int | None,
+    keychain: bool, config_dir: str | None,
 ) -> None:
     """Edit an existing SSH session. Only specified fields are updated."""
     config_dir_path = Path(config_dir) if config_dir else None
@@ -61,6 +62,9 @@ def edit_cmd(
     if tags is not None:
         session.tags = [t.strip() for t in tags.split(",") if t.strip()]
         changed.append("tags")
+    if group is not None:
+        session.group = group
+        changed.append("group")
     if notes is not None:
         session.notes = notes
         changed.append("notes")
