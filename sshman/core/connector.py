@@ -120,7 +120,7 @@ class SSHConnector:
             encoding="utf-8",
             timeout=self.session.keepalive if self.session.keepalive > 0 else 30,
             dimensions=(24, 80),
-            logfile=logfile,
+            logfile_read=logfile,  # child output only — avoids interact() stalls
         )
 
         try:
