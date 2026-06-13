@@ -202,18 +202,20 @@ class TestAutoLogInteract:
         mock_child.child_fd = 5
         connector.child = mock_child
 
-        # Simulate: child sends data, then EOF
+        # Simulate: child sends data, then EOF on child (session ends)
         call_count = [0]
 
         def fake_select(rlist, wlist, xlist, timeout=None):
             call_count[0] += 1
             if call_count[0] == 1:
                 return ([5], [], [])  # child_fd has data
-            return ([0], [], [])  # stdin has data (but we'll break on empty read)
+            if call_count[0] == 2:
+                return ([0], [], [])  # stdin briefly ready (spurious — skipped)
+            return ([5], [], [])      # child_fd has EOF (break)
 
         mock_select.side_effect = fake_select
 
-        # First read: data from child, second read: EOF
+        # child data → OK, stdin (spurious→skip) → child EOF → break
         mock_read.side_effect = [b"hello from server\n", b"", b""]
 
         connector.interact()

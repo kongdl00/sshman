@@ -200,14 +200,17 @@ class SSHConnector:
                 r, _, _ = select.select([child_fd, stdin_fd], [], [])
                 if child_fd in r:
                     data = os.read(child_fd, 4096)
-                    if not data:
+                    if not data:          # child closed — session ended
                         break
                     os.write(stdout_fd, data)
                     log_fh.write(data.decode("utf-8", errors="replace"))
+                    log_fh.flush()        # persist promptly for long sessions
                 if stdin_fd in r:
                     data = os.read(stdin_fd, 4096)
                     if not data:
-                        break
+                        # raw-mode tty may return 0 on spurious readiness;
+                        # never break the loop for stdin — only child EOF ends it
+                        continue
                     os.write(child_fd, data)
         finally:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tc)
