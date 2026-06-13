@@ -207,14 +207,29 @@ class SSHConnector:
             while True:
                 r, _, _ = select.select([child_fd, stdin_fd], [], [])
                 if child_fd in r:
-                    try:
-                        data = os.read(child_fd, 65536)
-                    except OSError:
-                        continue
-                    if not data:       # child PTY closed
+                    # Drain ALL available child output before returning
+                    # to select(), because macOS PTYs sometimes report
+                    # partial readiness and os.read may need several
+                    # calls to empty the kernel buffer.
+                    drained = False
+                    while True:
+                        try:
+                            data = os.read(child_fd, 65536)
+                        except BlockingIOError:
+                            break
+                        except OSError:
+                            if drained:
+                                break  # child closed, no more data
+                            # EIO on first attempt → child died
+                            data = None
+                        if not data:
+                            break
+                        drained = True
+                        os.write(stdout_fd, data)
+                        os.write(log_fh, data)
+                    if not drained:
+                        # No data AND no BlockingIOError → child is gone
                         break
-                    os.write(stdout_fd, data)
-                    os.write(log_fh, data)
                 if stdin_fd in r:
                     try:
                         data = os.read(stdin_fd, 65536)
