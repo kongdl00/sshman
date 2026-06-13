@@ -9,28 +9,6 @@ import pexpect
 from sshman.core.session import Session
 
 
-class _LazyLogFile:
-    """File-like wrapper that buffers writes and makes flush() a no-op.
-
-    pexpect calls .flush() after every write during interact(), which
-    triggers fflush(3) to disk on regular files — freezing the terminal.
-    This wrapper delegates writes to the underlying file but ignores
-    flush(), letting the OS buffer handle it at its own pace.
-    """
-
-    def __init__(self, path: str) -> None:
-        self._fh = open(path, "w", encoding="utf-8")
-
-    def write(self, s: str) -> None:
-        self._fh.write(s)
-
-    def flush(self) -> None:
-        pass  # intentionally no-op — avoid blocking disk I/O in interact()
-
-    def close(self) -> None:
-        self._fh.close()
-
-
 class SSHConnectionError(Exception):
     """Raised when SSH connection fails."""
     pass
@@ -60,6 +38,7 @@ class SSHConnector:
         self.session = session
         self.sessions = sessions or []
         self.child: pexpect.spawn | None = None
+        self._log_path: str | None = None
 
     def _find_session(self, name: str) -> Optional[Session]:
         for s in self.sessions:
@@ -70,13 +49,7 @@ class SSHConnector:
     def build_command(self, session: Session,
                       no_tunnels: bool = False,
                       tunnel_only: bool = False) -> list[str]:
-        """Build the SSH command list from a Session.
-
-        Args:
-            session: The session to build args for.
-            no_tunnels: If True, skip tunnel flags even if configured.
-            tunnel_only: If True, add -N (no remote command — tunnels only).
-        """
+        """Build the SSH command list from a Session."""
         cmd = ["ssh"]
         if session.port != 22:
             cmd.extend(["-p", str(session.port)])
@@ -86,16 +59,13 @@ class SSHConnector:
             cmd.extend(["-o", f"ServerAliveInterval={session.keepalive}"])
         cmd.extend(["-o", "StrictHostKeyChecking=ask"])
 
-        # --- Jumphost ---
         if session.jumphost:
             jump = self._find_session(session.jumphost)
             if jump:
                 cmd.extend(["-J", f"{jump.user}@{jump.host}:{jump.port}"])
             else:
-                # jumphost name might be a raw host:port or user@host
                 cmd.extend(["-J", session.jumphost])
 
-        # --- Tunnels ---
         if not no_tunnels:
             for t in session.tunnels:
                 ttype = t.get("type", "local")
@@ -119,23 +89,14 @@ class SSHConnector:
                 tunnel_only: bool = False) -> pexpect.spawn:
         """Spawn SSH connection and handle interactive authentication.
 
-        Returns the pexpect.spawn child process.  Caller is responsible
-        for calling child.interact() or reading output.
-
-        Raises SSHConnectionError on failure.
+        Logging (when session.auto_log is True) uses interact()'s
+        output_filter to tee child output to a log file, completely
+        bypassing pexpect's built-in logfile/logfile_read which call
+        flush() on every write and cause interact() to freeze on macOS.
         """
         cmd = self.build_command(self.session,
                                  no_tunnels=no_tunnels,
                                  tunnel_only=tunnel_only)
-
-        # --- Logger ---
-        logfile = None
-        if self.session.auto_log:
-            log_dir = Path.home() / ".sshman" / "logs" / self.session.name
-            log_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            log_path = log_dir / f"{ts}.log"
-            logfile = _LazyLogFile(str(log_path))
 
         self.child = pexpect.spawn(
             " ".join(cmd),
@@ -143,8 +104,12 @@ class SSHConnector:
             timeout=self.session.keepalive if self.session.keepalive > 0 else 30,
             dimensions=(24, 80),
         )
-        if logfile:
-            self.child.logfile_read = logfile
+
+        if self.session.auto_log:
+            log_dir = Path.home() / ".sshman" / "logs" / self.session.name
+            log_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            self._log_path = str(log_dir / f"{ts}.log")
 
         try:
             self._handle_interactive_login()
@@ -156,20 +121,14 @@ class SSHConnector:
         except pexpect.EOF:
             self.child.close()
             raise SSHConnectionError(
-                f"Connection to {self.session.name} ({self.session.host}) closed unexpectedly.\n"
-                f"SSH output:\n{self.child.before}"
+                f"Connection to {self.session.name} ({self.session.host}) closed "
+                f"unexpectedly.\nSSH output:\n{self.child.before}"
             )
 
         return self.child
 
     def _handle_interactive_login(self) -> None:
-        """Process interactive prompts until authenticated.
-
-        After sending the password, we do NOT call expect() to match a shell
-        prompt — that would consume MOTD/banners/prompt from pexpect's buffer,
-        leaving the user staring at a blank terminal in interact() mode.
-        Instead we sleep briefly and check that the child is still alive.
-        """
+        """Process interactive prompts until authenticated."""
         assert self.child is not None
 
         while True:
@@ -190,7 +149,6 @@ class SSHConnector:
                         f"Password for {self.session.user}@{self.session.host}: "
                     )
                 self.child.sendline(password)
-
                 time.sleep(0.8)
 
                 if not self.child.isalive():
@@ -209,10 +167,28 @@ class SSHConnector:
                 raise pexpect.TIMEOUT("timed out waiting for SSH prompt")
 
     def interact(self) -> None:
-        """Hand control to the user for interactive shell session."""
+        """Hand control to the user for interactive shell session.
+
+        If auto_log is enabled, uses interact()'s output_filter to tee
+        the child's output to a log file without involving pexpect's
+        logfile/logfile_read (whose flush() calls freeze on macOS APFS).
+        """
         if self.child is None:
             raise SSHConnectionError("not connected — call connect() first")
-        self.child.interact()
+
+        if self._log_path:
+            log_fh = open(self._log_path, "w", encoding="utf-8")
+
+            def _tee(data: str) -> str:
+                log_fh.write(data)
+                return data  # return unchanged — interact() writes to stdout
+
+            try:
+                self.child.interact(output_filter=_tee)
+            finally:
+                log_fh.close()
+        else:
+            self.child.interact()
 
     def close(self) -> None:
         """Close the SSH connection cleanly."""
@@ -223,7 +199,5 @@ class SSHConnector:
             except pexpect.ExceptionPexpect:
                 pass
         if self.child:
-            if self.child.logfile_read is not None:
-                self.child.logfile_read.close()
             self.child.close()
             self.child = None

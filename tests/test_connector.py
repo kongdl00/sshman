@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pexpect
 from sshman.core.connector import SSHConnector, SSHConnectionError
@@ -163,3 +164,41 @@ class TestHandleInteractiveLogin:
 
         # Should NOT send empty string — should fall back to config password
         mock_child.sendline.assert_called_once_with("config-pw")
+
+
+class TestAutoLogInteract:
+    def test_interact_with_auto_log_uses_output_filter(self, tmp_path):
+        """When auto_log is set, interact() passes output_filter to tee logs."""
+        session = Session(name="test", host="10.0.0.1", user="root",
+                          auto_log=True)
+        connector = SSHConnector(session)
+        connector._log_path = str(tmp_path / "test.log")
+        mock_child = MagicMock()
+        connector.child = mock_child
+
+        connector.interact()
+
+        # Should have called interact() with an output_filter callable
+        mock_child.interact.assert_called_once()
+        call_kwargs = mock_child.interact.call_args[1]
+        assert "output_filter" in call_kwargs
+        assert callable(call_kwargs["output_filter"])
+
+        # Verify the filter writes to the log file
+        fn = call_kwargs["output_filter"]
+        result = fn("hello server\n")
+        assert result == "hello server\n"  # returns unchanged for stdout
+        log_content = Path(tmp_path / "test.log").read_text()
+        assert "hello server" in log_content
+
+    def test_interact_without_auto_log_no_output_filter(self):
+        """When auto_log is not set, interact() passes no output_filter."""
+        session = Session(name="test", host="10.0.0.1", user="root")
+        connector = SSHConnector(session)
+        connector._log_path = None
+        mock_child = MagicMock()
+        connector.child = mock_child
+
+        connector.interact()
+
+        mock_child.interact.assert_called_once_with()
