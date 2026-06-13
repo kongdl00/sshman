@@ -1,8 +1,11 @@
+import os
+import tempfile
 import asyncio
 import click
 from pathlib import Path
 
 from sshman.core.config import ConfigManager
+from sshman.core.keyring import get_ssh_password
 from sshman.commands._helpers import resolve_master_password
 
 
@@ -17,7 +20,11 @@ from sshman.commands._helpers import resolve_master_password
 def batch_cmd(command: str, tag: str | None, group: str | None,
               names: str | None, parallel: int, timeout: int,
               config_dir: str | None) -> None:
-    """Execute a command on multiple servers in parallel."""
+    """Execute a command on multiple servers in parallel.
+
+    SSH passwords are resolved from the session config or system keychain.
+    Sessions requiring interactive password entry are skipped.
+    """
     config_dir_path = Path(config_dir) if config_dir else None
     cm = ConfigManager(config_dir=config_dir_path)
 
@@ -37,18 +44,20 @@ def batch_cmd(command: str, tag: str | None, group: str | None,
         click.echo("No matching sessions found.")
         return
 
-    click.echo(f"Running on {len(candidates)} host(s) (parallel={parallel}, timeout={timeout}s):\n")
+    click.echo(f"Running on {len(candidates)} host(s) "
+               f"(parallel={parallel}, timeout={timeout}s):\n")
 
     sem = asyncio.Semaphore(parallel)
 
     async def run_one(session):
         async with sem:
             cmd = ["ssh", "-o", f"ConnectTimeout={timeout}",
-                   "-o", "StrictHostKeyChecking=accept-new"]
+                   "-o", "StrictHostKeyChecking=accept-new",
+                   "-o", "BatchMode=no"]
+
             if session.port != 22:
                 cmd.extend(["-p", str(session.port)])
             if session.identity_file:
-                import os
                 cmd.extend(["-i", os.path.expanduser(session.identity_file)])
             if session.jumphost:
                 jump = cm.find_session(session.jumphost)
@@ -59,14 +68,55 @@ def batch_cmd(command: str, tag: str | None, group: str | None,
             cmd.append(f"{session.user}@{session.host}")
             cmd.append(command)
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            # Resolve SSH password
+            password = session.password or get_ssh_password(session.name)
+            env = None
+            askpass_script = None
 
-            return session.name, proc.returncode, stdout.decode(), stderr.decode()
+            if password:
+                # Create temp askpass script so SSH can get the password
+                # without a terminal.  Uses the SSH_ASKPASS + setsid pattern.
+                askpass_script = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".sh", delete=False,
+                )
+                askpass_script.write("#!/bin/sh\necho \"$SSHMAN_SSH_PASSWORD\"\n")
+                askpass_script.close()
+                os.chmod(askpass_script.name, 0o700)
+
+                env = {
+                    **os.environ,
+                    "SSH_ASKPASS": askpass_script.name,
+                    "SSHMAN_SSH_PASSWORD": password,
+                    "DISPLAY": "sshman:0",  # required to trigger ASKPASS
+                }
+                # Use setsid so SSH has no controlling terminal
+                cmd = ["setsid", "-w"] + cmd
+            elif not session.identity_file and not session.password:
+                # No password source and no key — would hang waiting for input
+                return (session.name, -1, "",
+                        "SKIPPED: no password or key configured")
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+                stdout, stderr = await proc.communicate()
+                rc = proc.returncode or 0
+            except Exception as e:
+                rc = -1
+                stdout = b""
+                stderr = str(e).encode()
+            finally:
+                if askpass_script:
+                    try:
+                        os.unlink(askpass_script.name)
+                    except OSError:
+                        pass
+
+            return session.name, rc, stdout.decode(), stderr.decode()
 
     async def run_all():
         tasks = [run_one(s) for s in candidates]
@@ -80,10 +130,17 @@ def batch_cmd(command: str, tag: str | None, group: str | None,
 
     # Print results
     for name, rc, out, err in results:
-        status = click.style("OK", fg="green") if rc == 0 else click.style(f"ERR({rc})", fg="red")
+        if rc == 0:
+            status = click.style("OK", fg="green")
+        elif rc == -1 and "SKIPPED" in err:
+            status = click.style("SKIP", fg="yellow")
+        else:
+            status = click.style(f"ERR({rc})", fg="red")
         click.echo(f"── {name} ── {status}")
         if out.strip():
             click.echo(click.style(out.rstrip(), fg="cyan"))
-        if err.strip():
+        if err.strip() and "SKIPPED" not in err:
             click.echo(click.style(err.rstrip(), fg="yellow"))
+        elif err.strip():
+            click.echo(click.style(err.strip(), fg="yellow"))
         click.echo()
