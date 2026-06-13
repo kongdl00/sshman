@@ -1,0 +1,72 @@
+import click
+from pathlib import Path
+
+from sshman.core.config import ConfigManager
+from sshman.core.session import Session
+
+
+@click.command("edit")
+@click.argument("name")
+@click.option("--host", default=None, help="New host address")
+@click.option("--port", type=int, default=None, help="New SSH port")
+@click.option("--user", default=None, help="New username")
+@click.option("--password", default=None, help="New SSH password")
+@click.option("--identity-file", default=None, help="New SSH private key path")
+@click.option("--tags", default=None, help="New tags (comma-separated, replaces all)")
+@click.option("--notes", default=None, help="New notes")
+@click.option("--keepalive", type=int, default=None, help="New keepalive interval")
+@click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
+def edit_cmd(
+    name: str, host: str | None, port: int | None, user: str | None,
+    password: str | None, identity_file: str | None, tags: str | None,
+    notes: str | None, keepalive: int | None, config_dir: str | None,
+) -> None:
+    """Edit an existing SSH session. Only specified fields are updated."""
+    config_dir_path = Path(config_dir) if config_dir else None
+    cm = ConfigManager(config_dir=config_dir_path)
+
+    master_password = click.prompt("Master password", hide_input=True)
+    try:
+        cm.load(master_password)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+    session = cm.find_session(name)
+    if not session:
+        click.echo(f"Session '{name}' not found.", err=True)
+        raise click.Abort()
+
+    # Apply changes only for explicitly provided options
+    changed = []
+    if host is not None:
+        session.host = host
+        changed.append("host")
+    if port is not None:
+        session.port = port
+        changed.append("port")
+    if user is not None:
+        session.user = user
+        changed.append("user")
+    if password is not None:
+        session.password = password
+        changed.append("password")
+    if identity_file is not None:
+        session.identity_file = identity_file
+        changed.append("identity-file")
+    if tags is not None:
+        session.tags = [t.strip() for t in tags.split(",") if t.strip()]
+        changed.append("tags")
+    if notes is not None:
+        session.notes = notes
+        changed.append("notes")
+    if keepalive is not None:
+        session.keepalive = keepalive
+        changed.append("keepalive")
+
+    if not changed:
+        click.echo("No changes specified. Use --help to see available options.")
+        return
+
+    cm.save(master_password)
+    click.echo(f"✓ Session '{name}' updated ({', '.join(changed)})")

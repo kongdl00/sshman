@@ -143,6 +143,43 @@ class TestRemoveCommand:
         assert "not found" in result.output
 
 
+class TestEditCommand:
+    @patch("sshman.commands.edit_cmd.ConfigManager")
+    def test_edit_updates_port_and_tags(self, mock_cm_class, tmp_path):
+        """edit updates only specified fields."""
+        from sshman.core.session import Session
+        mock_cm = MagicMock()
+        session = Session(name="test", host="10.0.0.1", user="root", port=22, tags=["old"])
+        mock_cm.find_session.return_value = session
+        mock_cm_class.return_value = mock_cm
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "edit", "test",
+            "--port", "2222",
+            "--tags", "prod,web",
+            "--config-dir", str(tmp_path / ".sshman"),
+        ], input="masterpass\n")
+        assert result.exit_code == 0
+        assert session.port == 2222
+        assert session.tags == ["prod", "web"]
+        mock_cm.save.assert_called_once()
+
+    @patch("sshman.commands.edit_cmd.ConfigManager")
+    def test_edit_session_not_found(self, mock_cm_class, tmp_path):
+        """edit fails gracefully for nonexistent session."""
+        mock_cm = MagicMock()
+        mock_cm.find_session.return_value = None
+        mock_cm_class.return_value = mock_cm
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["edit", "nosuch", "--port", "2222",
+                               "--config-dir", str(tmp_path / ".sshman")],
+                               input="testpass\n")
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+
 class TestConnectCommand:
     @patch("sshman.commands.connect_cmd.SSHConnector")
     @patch("sshman.commands.connect_cmd.ConfigManager")
