@@ -12,6 +12,7 @@ class Session:
     password: str = ""
     identity_file: str = ""
     tags: list[str] = field(default_factory=list)
+    group: str = ""
     jumphost: str = ""
     tunnels: list[dict[str, Any]] = field(default_factory=list)
     notes: str = ""
@@ -39,6 +40,7 @@ class Session:
             "password": self.password,
             "identity_file": self.identity_file,
             "tags": list(self.tags),
+            "group": self.group,
             "jumphost": self.jumphost,
             "tunnels": list(self.tunnels),
             "notes": self.notes,
@@ -57,6 +59,7 @@ class Session:
             password=d.get("password", ""),
             identity_file=d.get("identity_file", ""),
             tags=d.get("tags", []),
+            group=d.get("group", ""),
             jumphost=d.get("jumphost", ""),
             tunnels=d.get("tunnels", []),
             notes=d.get("notes", ""),

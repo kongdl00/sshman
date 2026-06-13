@@ -4,19 +4,21 @@ from pathlib import Path
 
 from sshman.core.config import ConfigManager
 from sshman.core.connector import SSHConnector, SSHConnectionError
+from sshman.commands._helpers import resolve_master_password
 
 
-@click.command("connect")
+@click.command("tunnel")
 @click.argument("name")
-@click.option("--log/--no-log", default=None, help="Enable/disable session logging")
-@click.option("--no-tunnels", is_flag=True, help="Skip port forwarding")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
-def connect_cmd(name: str, log: bool | None, no_tunnels: bool, config_dir: str | None) -> None:
-    """Connect to an SSH session."""
+def tunnel_cmd(name: str, config_dir: str | None) -> None:
+    """Establish SSH port forwarding tunnels without a remote shell.
+
+    Uses the session's configured tunnels list.  The SSH connection
+    stays in the foreground until Ctrl‑C.
+    """
     config_dir_path = Path(config_dir) if config_dir else None
     cm = ConfigManager(config_dir=config_dir_path)
 
-    from sshman.commands._helpers import resolve_master_password
     master_password = resolve_master_password(cm)
 
     session = cm.find_session(name)
@@ -24,16 +26,22 @@ def connect_cmd(name: str, log: bool | None, no_tunnels: bool, config_dir: str |
         click.echo(f"Session '{name}' not found.", err=True)
         raise click.Abort()
 
+    if not session.tunnels:
+        click.echo(f"Session '{name}' has no tunnels configured.", err=True)
+        raise click.Abort()
+
+    click.echo(f"Opening tunnels for {session.name} ({session.user}@{session.host})...")
+    click.echo("Press Ctrl-C to disconnect.\n")
+
     connector = SSHConnector(session, sessions=cm.sessions)
     try:
-        click.echo(f"Connecting to {session.name} ({session.user}@{session.host}:{session.port})...")
-        connector.connect()
-        # Hand control to user
+        connector.connect(no_tunnels=False, tunnel_only=True)
+        # Stay in foreground until Ctrl-C
         connector.interact()
     except SSHConnectionError as e:
-        click.echo(f"Connection failed: {e}", err=True)
+        click.echo(f"Tunnel failed: {e}", err=True)
         sys.exit(1)
     except KeyboardInterrupt:
-        click.echo("\nDisconnecting...")
+        click.echo("\nTunnels closed.")
     finally:
         connector.close()

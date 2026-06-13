@@ -8,14 +8,16 @@ class TestSSHConnectorBuildCommand:
     def test_build_command_minimal(self):
         """build_command returns proper ssh command list."""
         session = Session(name="test", host="10.0.0.1", user="root")
-        cmd = SSHConnector.build_command(session)
+        connector = SSHConnector(session)
+        cmd = connector.build_command(session)
         assert cmd[0] == "ssh"
         assert "root@10.0.0.1" in cmd
 
     def test_build_command_custom_port(self):
         """Custom port is included in ssh args."""
         session = Session(name="test", host="10.0.0.1", user="root", port=2222)
-        cmd = SSHConnector.build_command(session)
+        connector = SSHConnector(session)
+        cmd = connector.build_command(session)
         assert "-p" in cmd
         assert "2222" in cmd
 
@@ -23,21 +25,24 @@ class TestSSHConnectorBuildCommand:
         """Identity file adds -i flag with expanded user path."""
         import os
         session = Session(name="test", host="10.0.0.1", user="root", identity_file="~/.ssh/id_rsa")
-        cmd = SSHConnector.build_command(session)
+        connector = SSHConnector(session)
+        cmd = connector.build_command(session)
         idx = cmd.index("-i")
         assert cmd[idx + 1] == os.path.expanduser("~/.ssh/id_rsa")
 
     def test_build_command_keepalive(self):
         """keepalive adds -o ServerAliveInterval."""
         session = Session(name="test", host="10.0.0.1", user="root", keepalive=60)
-        cmd = SSHConnector.build_command(session)
+        connector = SSHConnector(session)
+        cmd = connector.build_command(session)
         assert "-o" in cmd
         assert "ServerAliveInterval=60" in cmd
 
     def test_build_command_default_port_not_in_args(self):
         """Default port 22 is not added to args."""
         session = Session(name="test", host="10.0.0.1", user="root", port=22)
-        cmd = SSHConnector.build_command(session)
+        connector = SSHConnector(session)
+        cmd = connector.build_command(session)
         assert "ssh" == cmd[0]
 
 

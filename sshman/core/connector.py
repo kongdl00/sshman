@@ -1,5 +1,9 @@
 import os
 import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
 import pexpect
 
 from sshman.core.session import Session
@@ -29,13 +33,28 @@ class SSHConnector:
     PATTERN_EOF = 4
     PATTERN_TIMEOUT = 5
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session,
+                 sessions: Optional[list[Session]] = None) -> None:
         self.session = session
+        self.sessions = sessions or []
         self.child: pexpect.spawn | None = None
 
-    @staticmethod
-    def build_command(session: Session) -> list[str]:
-        """Build the SSH command list from a Session."""
+    def _find_session(self, name: str) -> Optional[Session]:
+        for s in self.sessions:
+            if s.name == name:
+                return s
+        return None
+
+    def build_command(self, session: Session,
+                      no_tunnels: bool = False,
+                      tunnel_only: bool = False) -> list[str]:
+        """Build the SSH command list from a Session.
+
+        Args:
+            session: The session to build args for.
+            no_tunnels: If True, skip tunnel flags even if configured.
+            tunnel_only: If True, add -N (no remote command — tunnels only).
+        """
         cmd = ["ssh"]
         if session.port != 22:
             cmd.extend(["-p", str(session.port)])
@@ -44,23 +63,64 @@ class SSHConnector:
         if session.keepalive > 0:
             cmd.extend(["-o", f"ServerAliveInterval={session.keepalive}"])
         cmd.extend(["-o", "StrictHostKeyChecking=ask"])
+
+        # --- Jumphost ---
+        if session.jumphost:
+            jump = self._find_session(session.jumphost)
+            if jump:
+                cmd.extend(["-J", f"{jump.user}@{jump.host}:{jump.port}"])
+            else:
+                # jumphost name might be a raw host:port or user@host
+                cmd.extend(["-J", session.jumphost])
+
+        # --- Tunnels ---
+        if not no_tunnels:
+            for t in session.tunnels:
+                ttype = t.get("type", "local")
+                lp = t.get("local_port", "")
+                rh = t.get("remote_host", "127.0.0.1")
+                rp = t.get("remote_port", "")
+                if ttype == "local":
+                    cmd.extend(["-L", f"{lp}:{rh}:{rp}"])
+                elif ttype == "remote":
+                    cmd.extend(["-R", f"{lp}:{rh}:{rp}"])
+                elif ttype == "dynamic":
+                    cmd.extend(["-D", str(lp)])
+
+        if tunnel_only:
+            cmd.append("-N")
+
         cmd.append(f"{session.user}@{session.host}")
         return cmd
 
-    def connect(self) -> pexpect.spawn:
+    def connect(self, *, no_tunnels: bool = False,
+                tunnel_only: bool = False) -> pexpect.spawn:
         """Spawn SSH connection and handle interactive authentication.
 
-        Returns the pexpect.spawn child process. Caller is responsible
+        Returns the pexpect.spawn child process.  Caller is responsible
         for calling child.interact() or reading output.
 
         Raises SSHConnectionError on failure.
         """
-        cmd = self.build_command(self.session)
+        cmd = self.build_command(self.session,
+                                 no_tunnels=no_tunnels,
+                                 tunnel_only=tunnel_only)
+
+        # --- Logger ---
+        logfile = None
+        if self.session.auto_log:
+            log_dir = Path.home() / ".sshman" / "logs" / self.session.name
+            log_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            log_path = log_dir / f"{ts}.log"
+            logfile = open(str(log_path), "w", encoding="utf-8")
+
         self.child = pexpect.spawn(
             " ".join(cmd),
             encoding="utf-8",
             timeout=self.session.keepalive if self.session.keepalive > 0 else 30,
             dimensions=(24, 80),
+            logfile=logfile,
         )
 
         try:
@@ -108,10 +168,6 @@ class SSHConnector:
                     )
                 self.child.sendline(password)
 
-                # Wait briefly for SSH to establish the session.
-                # We intentionally avoid expect() here — any output
-                # (MOTD, last login, shell prompt) must stay in the buffer
-                # so the user sees it when interact() takes over.
                 time.sleep(0.8)
 
                 if not self.child.isalive():
