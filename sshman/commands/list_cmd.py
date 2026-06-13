@@ -14,12 +14,8 @@ def list_cmd(tag: str | None, keyword: str | None, detail: bool, config_dir: str
     config_dir_path = Path(config_dir) if config_dir else None
     cm = ConfigManager(config_dir=config_dir_path)
 
-    master_password = click.prompt("Master password", hide_input=True)
-    try:
-        cm.load(master_password)
-    except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
-        raise click.Abort()
+    from sshman.commands._helpers import resolve_master_password
+    master_password = resolve_master_password(cm)
 
     tag_list = [t.strip() for t in tag.split(",") if t.strip()] if tag else None
     sessions = cm.list_sessions(tags=tag_list, keyword=keyword)

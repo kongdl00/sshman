@@ -11,6 +11,7 @@ from sshman.commands.remove_cmd import remove_cmd
 from sshman.commands.connect_cmd import connect_cmd
 from sshman.commands.edit_cmd import edit_cmd
 from sshman.commands.crypto_cmd import crypto_group
+from sshman.commands.keyring_cmd import keyring_group
 
 
 @click.group()
@@ -31,6 +32,7 @@ main.add_command(remove_cmd)
 main.add_command(connect_cmd)
 main.add_command(edit_cmd)
 main.add_command(crypto_group)
+main.add_command(keyring_group)
 
 
 if __name__ == "__main__":

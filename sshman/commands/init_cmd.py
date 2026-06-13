@@ -55,3 +55,9 @@ def init_cmd(config_dir: str | None) -> None:
 
     click.echo(f"✓ sshman initialized — config at {cm.config_file}")
     click.echo(f"✓ Salt stored at {salt_file}")
+
+    # Offer to remember password in system keychain
+    from sshman.core.keyring import set_password
+    if click.confirm("Remember master password in system keychain?", default=True):
+        set_password(password)
+        click.echo("✓ Password saved to keychain.")

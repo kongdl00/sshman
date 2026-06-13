@@ -23,13 +23,9 @@ def add_cmd(
     config_dir_path = Path(config_dir) if config_dir else None
     cm = ConfigManager(config_dir=config_dir_path)
 
-    # Decrypt existing config to load sessions
-    master_password = click.prompt("Master password", hide_input=True)
-    try:
-        cm.load(master_password)
-    except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
-        raise click.Abort()
+    # Decrypt existing config to load sessions (auto-caches in keychain)
+    from sshman.commands._helpers import resolve_master_password
+    master_password = resolve_master_password(cm)
 
     # Check for duplicates
     if cm.find_session(name):
