@@ -203,30 +203,22 @@ class SSHConnector:
         old_tc = termios.tcgetattr(stdin_fd)
         tty.setraw(stdin_fd)
 
+        eof = False
         try:
-            while True:
+            while not eof:
                 r, _, _ = select.select([child_fd, stdin_fd], [], [])
                 if child_fd in r:
-                    # Drain ALL available child output before returning
-                    # to select(), because macOS PTYs sometimes report
-                    # partial readiness and os.read may need several
-                    # calls to empty the kernel buffer.
-                    drained = False
                     while True:
                         try:
                             data = os.read(child_fd, 65536)
                         except OSError:
-                            # EAGAIN/EWOULDBLOCK: no data right now
-                            # EIO: child PTY closed
                             break
                         if not data:
+                            eof = True   # genuine EOF
                             break
-                        drained = True
                         os.write(stdout_fd, data)
                         os.write(log_fh, data)
-                    if not drained:
-                        break  # child_fd readable but no data → PTY closed
-                if stdin_fd in r:
+                if stdin_fd in r and not eof:
                     try:
                         data = os.read(stdin_fd, 65536)
                     except OSError:
