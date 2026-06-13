@@ -198,16 +198,26 @@ class SSHConnector:
         tty.setraw(stdin_fd)
 
         try:
-            while True:
+            eof = False
+            while not eof:
                 r, _, _ = select.select([child_fd, stdin_fd], [], [])
                 if child_fd in r:
-                    try:
-                        data = self.child.read_nonblocking(size=4096, timeout=0)
-                    except pexpect.EOF:
-                        break
-                    except pexpect.TIMEOUT:
-                        continue
-                    if data:
+                    # pexpect may read ALL pty data into its internal buffer
+                    # but only return <size> bytes per call.  Keep reading
+                    # until TIMEOUT (buffer exhausted) or EOF — never go
+                    # back to select() with data still buffered internally.
+                    while True:
+                        try:
+                            data = self.child.read_nonblocking(
+                                size=4096, timeout=0,
+                            )
+                        except pexpect.EOF:
+                            eof = True
+                            break
+                        except pexpect.TIMEOUT:
+                            break
+                        if not data:
+                            break
                         data_bytes = data.encode("utf-8", errors="replace")
                         os.write(stdout_fd, data_bytes)
                         log_fh.write(data)

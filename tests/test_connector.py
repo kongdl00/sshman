@@ -180,7 +180,6 @@ class TestAutoLogInteract:
 
     @patch("sys.stdout", new=MagicMock())
     @patch("sys.stdin", new=MagicMock())
-    @patch("pexpect.TIMEOUT", new=Exception("TIMEOUT"))
     @patch("sshman.core.connector.SSHConnector._drain_pexpect_buffer")
     @patch("select.select")
     @patch("os.read")
@@ -192,7 +191,7 @@ class TestAutoLogInteract:
                                               mock_tcget, mock_write,
                                               mock_read, mock_select,
                                               mock_drain, tmp_path):
-        """When auto_log is on, reads via pexpect + writes log, no freeze."""
+        """auto_log: inner loop drains pexpect buffer before returning to select."""
         import sys
         sys.stdin.fileno.return_value = 0
         sys.stdout.fileno.return_value = 1
@@ -206,18 +205,19 @@ class TestAutoLogInteract:
         mock_child.child_fd = 5
         connector.child = mock_child
 
-        # select: child_fd has data, then EOF
+        # select: child_fd readable × 2
         mock_select.side_effect = [([5], [], []), ([5], [], [])]
-        # child output, then EOF (as exception instance)
+        # 1st iter: chunk1→chunk2→TIMEOUT. 2nd iter: EOF→break outer.
         mock_child.read_nonblocking.side_effect = [
-            "hello from server\n", pexpect.EOF("session ended"),
+            "chunk1\n", "chunk2\n", pexpect.TIMEOUT(""),
+            pexpect.EOF("done"),
         ]
 
         connector.interact()
 
         log_content = log_path.read_text()
-        assert "hello from server" in log_content
-        mock_write.assert_any_call(1, b"hello from server\n")
+        assert "chunk1" in log_content
+        assert "chunk2" in log_content
 
         # Terminal should have received the data
-        mock_write.assert_any_call(1, b"hello from server\n")  # stdout_fd=1
+        mock_write.assert_any_call(1, b"chunk1\n")
