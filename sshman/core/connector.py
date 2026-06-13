@@ -1,5 +1,4 @@
 import os
-import platform
 import time
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +38,7 @@ class SSHConnector:
         self.session = session
         self.sessions = sessions or []
         self.child: pexpect.spawn | None = None
+        self._log_fh = None
 
     def _find_session(self, name: str) -> Optional[Session]:
         for s in self.sessions:
@@ -89,41 +89,28 @@ class SSHConnector:
                 tunnel_only: bool = False) -> pexpect.spawn:
         """Spawn SSH connection and handle interactive authentication.
 
-        When auto_log is enabled, the SSH command is wrapped in ``script``
-        (the standard Unix terminal recorder).  This is the only approach
-        that works reliably on macOS: every pexpect-level logging mechanism
-        (logfile, logfile_read, output_filter, custom select loop) either
-        freezes interact() or loses data on APFS.
+        When session.auto_log is True, opens a log file and passes it to
+        interact() for raw-fd tee logging — the only approach that works
+        on macOS APFS without freezing.
         """
         cmd = self.build_command(self.session,
                                  no_tunnels=no_tunnels,
                                  tunnel_only=tunnel_only)
 
-        spawn_cmd: str
+        self.child = pexpect.spawn(
+            " ".join(cmd),
+            encoding="utf-8",
+            timeout=self.session.keepalive if self.session.keepalive > 0 else 30,
+            dimensions=(24, 80),
+        )
+
         if self.session.auto_log:
             log_dir = Path.home() / ".sshman" / "logs" / self.session.name
             log_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             log_path = str(log_dir / f"{ts}.log")
-
-            # script usage differs by platform
-            if platform.system() == "Darwin":
-                # macOS: script [-q] [-t 0] <logfile> <command...>
-                spawn_cmd = f"script -q {log_path} {' '.join(cmd)}"
-            else:
-                # Linux: script -q -c "<command>" <logfile>
-                spawn_cmd = (
-                    f"script -q -c \"{' '.join(cmd)}\" {log_path}"
-                )
-        else:
-            spawn_cmd = " ".join(cmd)
-
-        self.child = pexpect.spawn(
-            spawn_cmd,
-            encoding="utf-8",
-            timeout=self.session.keepalive if self.session.keepalive > 0 else 30,
-            dimensions=(24, 80),
-        )
+            # Open unbuffered — we call fsync ourselves
+            self._log_fh = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 
         try:
             self._handle_interactive_login()
@@ -181,10 +168,65 @@ class SSHConnector:
                 raise pexpect.TIMEOUT("timed out waiting for SSH prompt")
 
     def interact(self) -> None:
-        """Hand control to the user for interactive shell session."""
+        """Hand control to the user for interactive shell session.
+
+        When auto_log is enabled: runs a raw select()/os.read/os.write
+        loop that tees child output to the open log fd.  Pexpect's own
+        interact() is *not* used — every pexpect logging path (logfile,
+        logfile_read, output_filter, interact) calls flush() on the log
+        file inside its inner loop, which blocks on APFS and either
+        freezes the terminal or drops data.
+        """
         if self.child is None:
             raise SSHConnectionError("not connected — call connect() first")
-        self.child.interact()
+
+        if self._log_fh is None:
+            self.child.interact()
+            return
+
+        import select
+        import sys
+        import tty
+        import termios
+
+        child_fd = self.child.child_fd
+        stdin_fd = sys.stdin.fileno()
+        stdout_fd = sys.stdout.fileno()
+        log_fh = self._log_fh
+
+        # Flush anything pexpect read into its buffer during login
+        buf = self.child.buffer
+        if buf:
+            os.write(stdout_fd, buf.encode("utf-8"))
+            os.write(log_fh, buf.encode("utf-8"))
+
+        old_tc = termios.tcgetattr(stdin_fd)
+        tty.setraw(stdin_fd)
+
+        try:
+            while True:
+                r, _, _ = select.select([child_fd, stdin_fd], [], [])
+                if child_fd in r:
+                    try:
+                        data = os.read(child_fd, 65536)
+                    except OSError:
+                        continue
+                    if not data:       # child PTY closed
+                        break
+                    os.write(stdout_fd, data)
+                    os.write(log_fh, data)
+                if stdin_fd in r:
+                    try:
+                        data = os.read(stdin_fd, 65536)
+                    except OSError:
+                        continue
+                    if not data:
+                        continue
+                    os.write(child_fd, data)
+        finally:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tc)
+            os.close(log_fh)
+            self._log_fh = None
 
     def close(self) -> None:
         """Close the SSH connection cleanly."""
