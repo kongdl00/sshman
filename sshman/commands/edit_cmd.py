@@ -11,6 +11,7 @@ from sshman.core.session import Session
 @click.option("--port", type=int, default=None, help="New SSH port")
 @click.option("--user", default=None, help="New username")
 @click.option("--password", default=None, help="New SSH password")
+@click.option("--keychain", is_flag=True, help="Store SSH password in system keychain instead of config")
 @click.option("--identity-file", default=None, help="New SSH private key path")
 @click.option("--tags", default=None, help="New tags (comma-separated, replaces all)")
 @click.option("--notes", default=None, help="New notes")
@@ -19,7 +20,8 @@ from sshman.core.session import Session
 def edit_cmd(
     name: str, host: str | None, port: int | None, user: str | None,
     password: str | None, identity_file: str | None, tags: str | None,
-    notes: str | None, keepalive: int | None, config_dir: str | None,
+    notes: str | None, keepalive: int | None, keychain: bool,
+    config_dir: str | None,
 ) -> None:
     """Edit an existing SSH session. Only specified fields are updated."""
     config_dir_path = Path(config_dir) if config_dir else None
@@ -45,7 +47,13 @@ def edit_cmd(
         session.user = user
         changed.append("user")
     if password is not None:
-        session.password = password
+        if keychain and password:
+            from sshman.core.keyring import set_ssh_password
+            set_ssh_password(name, password)
+            session.password = ""
+            click.echo("  SSH password stored in system keychain.")
+        else:
+            session.password = password
         changed.append("password")
     if identity_file is not None:
         session.identity_file = identity_file

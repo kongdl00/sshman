@@ -125,3 +125,36 @@ class TestHandleInteractiveLogin:
             assert "connection lost" in str(e).lower()
         else:
             raise AssertionError("Expected SSHConnectionError")
+
+    @patch("sshman.core.keyring.get_ssh_password")
+    def test_login_falls_back_to_keychain(self, mock_get_ssh):
+        """When session.password is empty, check keychain for SSH password."""
+        session = Session(name="test", host="10.0.0.1", user="root",
+                          password="")  # no password in config
+        mock_get_ssh.return_value = "keychain-pw"
+        connector = SSHConnector(session)
+        mock_child = MagicMock()
+        mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
+        mock_child.isalive.return_value = True
+        connector.child = mock_child
+
+        connector._handle_interactive_login()
+
+        mock_get_ssh.assert_called_once_with("test")
+        mock_child.sendline.assert_called_once_with("keychain-pw")
+
+    @patch("sshman.core.keyring.get_ssh_password", return_value=None)
+    def test_login_keychain_empty_falls_back_to_config(self, mock_get_ssh):
+        """When keychain returns None, use session.password from config."""
+        session = Session(name="test", host="10.0.0.1", user="root",
+                          password="config-pw")
+        connector = SSHConnector(session)
+        mock_child = MagicMock()
+        mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
+        mock_child.isalive.return_value = True
+        connector.child = mock_child
+
+        connector._handle_interactive_login()
+
+        # Should NOT send empty string — should fall back to config password
+        mock_child.sendline.assert_called_once_with("config-pw")

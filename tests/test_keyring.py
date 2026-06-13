@@ -142,6 +142,60 @@ class TestSessionCache:
         assert not path.exists()
 
 
+class TestSSHPasswordDarwin:
+    def test_get_ssh_password_found(self, monkeypatch):
+        """macOS: get_ssh_password returns password for session."""
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        mock_run = MagicMock()
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ssh-secret\n", stderr="",
+        )
+        monkeypatch.setattr("subprocess.run", mock_run)
+
+        from sshman.core.keyring import get_ssh_password
+        result = get_ssh_password("prod-web")
+        assert result == "ssh-secret"
+        # Verify service name contains session name
+        args = mock_run.call_args[0][0]
+        assert "sshman-ssh-prod-web" in args
+
+    def test_get_ssh_password_not_found(self, monkeypatch):
+        """macOS: get_ssh_password returns None for unknown session."""
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.setattr("subprocess.run",
+                            MagicMock(side_effect=FileNotFoundError))
+
+        from sshman.core.keyring import get_ssh_password
+        result = get_ssh_password("nonexistent")
+        assert result is None
+
+    def test_set_ssh_password_calls_security(self, monkeypatch):
+        """macOS: set_ssh_password calls security add-generic-password."""
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        mock_run = MagicMock()
+        monkeypatch.setattr("subprocess.run", mock_run)
+
+        from sshman.core.keyring import set_ssh_password
+        set_ssh_password("my-session", "mypassword")
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        assert "add-generic-password" in args
+        assert "sshman-ssh-my-session" in args
+        assert "mypassword" in args
+
+    def test_clear_ssh_password_calls_security(self, monkeypatch):
+        """macOS: clear_ssh_password calls security delete-generic-password."""
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        mock_run = MagicMock()
+        monkeypatch.setattr("subprocess.run", mock_run)
+
+        from sshman.core.keyring import clear_ssh_password
+        clear_ssh_password("old-session")
+        args = mock_run.call_args[0][0]
+        assert "delete-generic-password" in args
+        assert "sshman-ssh-old-session" in args
+
+
 class TestOtherPlatform:
     def test_get_password_returns_none(self, monkeypatch):
         """Non-Darwin/Linux: get is always None."""

@@ -3,7 +3,10 @@
 import click
 from pathlib import Path
 
-from sshman.core.keyring import get_password, set_password, clear_password
+from sshman.core.keyring import (
+    get_password, set_password, clear_password,
+    clear_ssh_password,
+)
 from sshman.core.config import ConfigManager
 
 
@@ -60,3 +63,14 @@ def set_cmd(config_dir: str | None) -> None:
 
     set_password(password)
     click.echo("✓ Password saved to system keychain.")
+
+
+@keyring_group.command("ssh-clear")
+@click.argument("session_name")
+def ssh_clear_cmd(session_name: str) -> None:
+    """Remove stored SSH password for a session from system keychain."""
+    clear_ssh_password(session_name)
+    click.echo(
+        f"✓ Removed stored SSH password for '{session_name}' "
+        f"from system keychain."
+    )

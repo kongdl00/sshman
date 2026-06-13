@@ -167,3 +167,105 @@ else:
     get_password = lambda: None       # type: ignore[assignment]
     set_password = lambda p: None     # type: ignore[assignment]
     clear_password = lambda: None     # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# SSH session password API — keyed by session name
+# ---------------------------------------------------------------------------
+
+def _ssh_service_name(session_name: str) -> str:
+    return f"sshman-ssh-{session_name}"
+
+
+def get_ssh_password(session_name: str) -> str | None:
+    """Retrieve SSH password for a named session from the system keychain.
+
+    Args:
+        session_name: The session ``name`` field.
+
+    Returns:
+        Password string, or ``None`` if not found / platform unavailable.
+    """
+    service = _ssh_service_name(session_name)
+    if _system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["/usr/bin/security", "find-generic-password",
+                 "-a", ACCOUNT_NAME, "-s", service, "-w"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        return None
+    elif _system == "Linux":
+        try:
+            result = subprocess.run(
+                ["secret-tool", "lookup", "application", service,
+                 "account", ACCOUNT_NAME],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        return _session_cache_get()
+    return None
+
+
+def set_ssh_password(session_name: str, password: str) -> None:
+    """Store SSH password for a named session in the system keychain.
+
+    Args:
+        session_name: The session ``name`` field.
+        password: The SSH password to store.
+    """
+    service = _ssh_service_name(session_name)
+    if _system == "Darwin":
+        try:
+            subprocess.run(
+                ["/usr/bin/security", "add-generic-password",
+                 "-a", ACCOUNT_NAME, "-s", service, "-w", password, "-U"],
+                capture_output=True, timeout=5,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+    elif _system == "Linux":
+        try:
+            subprocess.run(
+                ["secret-tool", "store", "--label", f"sshman SSH password: {session_name}",
+                 "application", service, "account", ACCOUNT_NAME],
+                input=password, capture_output=True, text=True, timeout=5,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        _session_cache_set(password)
+
+
+def clear_ssh_password(session_name: str) -> None:
+    """Remove SSH password for a named session from the system keychain.
+
+    Args:
+        session_name: The session ``name`` field.
+    """
+    service = _ssh_service_name(session_name)
+    if _system == "Darwin":
+        try:
+            subprocess.run(
+                ["/usr/bin/security", "delete-generic-password",
+                 "-a", ACCOUNT_NAME, "-s", service],
+                capture_output=True, timeout=5,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+    elif _system == "Linux":
+        try:
+            subprocess.run(
+                ["secret-tool", "clear", "application", service,
+                 "account", ACCOUNT_NAME],
+                capture_output=True, timeout=5,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        _session_cache_clear()

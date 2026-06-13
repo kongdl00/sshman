@@ -11,13 +11,15 @@ from sshman.core.session import Session
 @click.option("--port", default=22, help="SSH port (default: 22)")
 @click.option("--user", prompt="Username", help="SSH login username")
 @click.option("--password", default="", help="SSH password (leave blank to use key or prompt)")
+@click.option("--keychain", is_flag=True, help="Store SSH password in system keychain instead of config")
 @click.option("--identity-file", default="", help="Path to SSH private key")
 @click.option("--tags", default="", help="Comma-separated tags (e.g. prod,web)")
 @click.option("--notes", default="", help="Optional notes")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
 def add_cmd(
     name: str, host: str, port: int, user: str, password: str,
-    identity_file: str, tags: str, notes: str, config_dir: str | None,
+    identity_file: str, tags: str, notes: str, keychain: bool,
+    config_dir: str | None,
 ) -> None:
     """Add a new SSH session interactively."""
     config_dir_path = Path(config_dir) if config_dir else None
@@ -34,12 +36,20 @@ def add_cmd(
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
+    # Handle keychain storage for SSH password
+    stored_password = password
+    if keychain and password:
+        from sshman.core.keyring import set_ssh_password
+        set_ssh_password(name, password)
+        stored_password = ""  # don't write to YAML
+        click.echo(f"  SSH password stored in system keychain.")
+
     session = Session(
         name=name,
         host=host,
         port=port,
         user=user,
-        password=password,
+        password=stored_password,
         identity_file=identity_file,
         tags=tag_list,
         notes=notes,

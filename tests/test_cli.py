@@ -165,6 +165,32 @@ class TestAddCommand:
         assert len(mock_cm.sessions) == 1
         mock_cm.save.assert_called_once()
 
+    @patch("sshman.core.keyring.set_ssh_password")
+    @patch("sshman.commands._helpers.set_password")
+    @patch("sshman.commands._helpers.get_password", return_value=None)
+    @patch("sshman.commands.add_cmd.ConfigManager")
+    def test_add_with_keychain_stores_in_keychain(self, mock_cm_class,
+                                                   mock_get, mock_set_master,
+                                                   mock_set_ssh, tmp_path):
+        """add --password X --keychain stores SSH password in keychain, not YAML."""
+        mock_cm = MagicMock()
+        mock_cm.find_session.return_value = None
+        mock_cm.sessions = []
+        mock_cm.config_file = MagicMock()
+        mock_cm_class.return_value = mock_cm
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "add", "--name", "test-server", "--host", "10.0.0.1",
+            "--user", "root", "--password", "ssh-secret", "--keychain",
+            "--config-dir", str(tmp_path / ".sshman"),
+        ], input="masterpass\n")
+        assert result.exit_code == 0
+        mock_set_ssh.assert_called_once_with("test-server", "ssh-secret")
+        # Password should NOT be in the YAML session
+        saved_session = mock_cm.sessions[0]
+        assert saved_session.password == ""
+
 
 class TestListCommand:
     @patch("sshman.commands._helpers.set_password")
@@ -332,3 +358,11 @@ class TestKeyringCommands:
         )
         assert result.exit_code != 0
         assert "sshman init" in result.output
+
+    @patch("sshman.commands.keyring_cmd.clear_ssh_password")
+    def test_keyring_ssh_clear(self, mock_clear_ssh):
+        """keyring ssh-clear clears SSH password for a session."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["keyring", "ssh-clear", "prod-web"])
+        assert result.exit_code == 0
+        mock_clear_ssh.assert_called_once_with("prod-web")

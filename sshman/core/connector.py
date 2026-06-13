@@ -99,6 +99,9 @@ class SSHConnector:
             elif idx in (self.PATTERN_PASSWORD, self.PATTERN_MFA, self.PATTERN_MFA_2):
                 password = self.session.password
                 if not password:
+                    from sshman.core.keyring import get_ssh_password
+                    password = get_ssh_password(self.session.name)
+                if not password:
                     import getpass
                     password = getpass.getpass(
                         f"Password for {self.session.user}@{self.session.host}: "
