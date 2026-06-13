@@ -70,38 +70,34 @@ def batch_cmd(command: str, tag: str | None, group: str | None,
 
             # Resolve SSH password
             password = session.password or get_ssh_password(session.name)
-            env = None
             askpass_script = None
 
+            if not password and not session.identity_file:
+                return (session.name, -1, "",
+                        "SKIPPED: no password or key configured")
+
+            kwargs = {}
             if password:
-                # Create temp askpass script so SSH can get the password
-                # without a terminal.  Uses the SSH_ASKPASS + setsid pattern.
                 askpass_script = tempfile.NamedTemporaryFile(
                     mode="w", suffix=".sh", delete=False,
                 )
                 askpass_script.write("#!/bin/sh\necho \"$SSHMAN_SSH_PASSWORD\"\n")
                 askpass_script.close()
                 os.chmod(askpass_script.name, 0o700)
-
-                env = {
+                kwargs["env"] = {
                     **os.environ,
                     "SSH_ASKPASS": askpass_script.name,
                     "SSHMAN_SSH_PASSWORD": password,
-                    "DISPLAY": "sshman:0",  # required to trigger ASKPASS
+                    "DISPLAY": "sshman:0",
                 }
-                # Use setsid so SSH has no controlling terminal
-                cmd = ["setsid", "-w"] + cmd
-            elif not session.identity_file and not session.password:
-                # No password source and no key — would hang waiting for input
-                return (session.name, -1, "",
-                        "SKIPPED: no password or key configured")
+                kwargs["start_new_session"] = True
 
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    env=env,
+                    **kwargs,
                 )
                 stdout, stderr = await proc.communicate()
                 rc = proc.returncode or 0
