@@ -169,26 +169,49 @@ class SSHConnector:
     def interact(self) -> None:
         """Hand control to the user for interactive shell session.
 
-        If auto_log is enabled, uses interact()'s output_filter to tee
-        the child's output to a log file without involving pexpect's
-        logfile/logfile_read (whose flush() calls freeze on macOS APFS).
+        When auto_log is enabled we run our own select()-based I/O loop
+        instead of calling pexpect.interact().  Every approach built on
+        pexpect's interact() — logfile, logfile_read, output_filter —
+        ultimately calls flush() inside the select loop, which blocks on
+        APFS and freezes the terminal.
         """
         if self.child is None:
             raise SSHConnectionError("not connected — call connect() first")
 
-        if self._log_path:
-            log_fh = open(self._log_path, "w", encoding="utf-8")
-
-            def _tee(data: str) -> str:
-                log_fh.write(data)
-                return data  # return unchanged — interact() writes to stdout
-
-            try:
-                self.child.interact(output_filter=_tee)
-            finally:
-                log_fh.close()
-        else:
+        if not self._log_path:
             self.child.interact()
+            return
+
+        import select
+        import sys
+        import tty
+        import termios
+
+        log_fh = open(self._log_path, "w", encoding="utf-8")
+        child_fd = self.child.child_fd
+        stdin_fd = sys.stdin.fileno()
+        stdout_fd = sys.stdout.fileno()
+
+        old_tc = termios.tcgetattr(stdin_fd)
+        tty.setraw(stdin_fd)
+
+        try:
+            while True:
+                r, _, _ = select.select([child_fd, stdin_fd], [], [])
+                if child_fd in r:
+                    data = os.read(child_fd, 4096)
+                    if not data:
+                        break
+                    os.write(stdout_fd, data)
+                    log_fh.write(data.decode("utf-8", errors="replace"))
+                if stdin_fd in r:
+                    data = os.read(stdin_fd, 4096)
+                    if not data:
+                        break
+                    os.write(child_fd, data)
+        finally:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tc)
+            log_fh.close()
 
     def close(self) -> None:
         """Close the SSH connection cleanly."""

@@ -167,33 +167,8 @@ class TestHandleInteractiveLogin:
 
 
 class TestAutoLogInteract:
-    def test_interact_with_auto_log_uses_output_filter(self, tmp_path):
-        """When auto_log is set, interact() tees child output to log file."""
-        session = Session(name="test", host="10.0.0.1", user="root",
-                          auto_log=True)
-        connector = SSHConnector(session)
-        log_path = tmp_path / "test.log"
-        connector._log_path = str(log_path)
-        mock_child = MagicMock()
-
-        def fake_interact(**kwargs):
-            fn = kwargs.get("output_filter")
-            assert fn is not None
-            assert fn("line1\n") == "line1\n"
-            fn("line2\n")
-
-        mock_child.interact = fake_interact
-        connector.child = mock_child
-
-        connector.interact()
-
-        # Verify log file contains the teed output
-        log_content = log_path.read_text()
-        assert "line1" in log_content
-        assert "line2" in log_content
-
-    def test_interact_without_auto_log_no_output_filter(self):
-        """When auto_log is not set, interact() passes no output_filter."""
+    def test_interact_without_auto_log_delegates_to_pexpect(self):
+        """When auto_log is off, call pexpect.interact()."""
         session = Session(name="test", host="10.0.0.1", user="root")
         connector = SSHConnector(session)
         connector._log_path = None
@@ -201,5 +176,51 @@ class TestAutoLogInteract:
         connector.child = mock_child
 
         connector.interact()
-
         mock_child.interact.assert_called_once_with()
+
+    @patch("sys.stdout", new=MagicMock())
+    @patch("sys.stdin", new=MagicMock())
+    @patch("select.select")
+    @patch("os.read")
+    @patch("os.write")
+    @patch("termios.tcgetattr")
+    @patch("termios.tcsetattr")
+    @patch("tty.setraw")
+    def test_interact_with_auto_log_own_loop(self, mock_setraw, mock_tcset,
+                                              mock_tcget, mock_write,
+                                              mock_read, mock_select, tmp_path):
+        import sys
+        sys.stdin.fileno.return_value = 0
+        sys.stdout.fileno.return_value = 1
+        """When auto_log is on, runs custom select loop and writes log."""
+        session = Session(name="test", host="10.0.0.1", user="root",
+                          auto_log=True)
+        connector = SSHConnector(session)
+        log_path = tmp_path / "test.log"
+        connector._log_path = str(log_path)
+        mock_child = MagicMock()
+        mock_child.child_fd = 5
+        connector.child = mock_child
+
+        # Simulate: child sends data, then EOF
+        call_count = [0]
+
+        def fake_select(rlist, wlist, xlist, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return ([5], [], [])  # child_fd has data
+            return ([0], [], [])  # stdin has data (but we'll break on empty read)
+
+        mock_select.side_effect = fake_select
+
+        # First read: data from child, second read: EOF
+        mock_read.side_effect = [b"hello from server\n", b"", b""]
+
+        connector.interact()
+
+        # Log file should contain the child's output
+        log_content = log_path.read_text()
+        assert "hello from server" in log_content
+
+        # Terminal should have received the data
+        mock_write.assert_any_call(1, b"hello from server\n")  # stdout_fd=1
