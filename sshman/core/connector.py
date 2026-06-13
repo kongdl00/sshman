@@ -205,6 +205,8 @@ class SSHConnector:
                         data = self.child.read_nonblocking(size=4096, timeout=0)
                     except pexpect.EOF:
                         break
+                    except pexpect.TIMEOUT:
+                        continue
                     if data:
                         data_bytes = data.encode("utf-8", errors="replace")
                         os.write(stdout_fd, data_bytes)
