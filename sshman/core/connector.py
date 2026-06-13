@@ -9,6 +9,28 @@ import pexpect
 from sshman.core.session import Session
 
 
+class _LazyLogFile:
+    """File-like wrapper that buffers writes and makes flush() a no-op.
+
+    pexpect calls .flush() after every write during interact(), which
+    triggers fflush(3) to disk on regular files — freezing the terminal.
+    This wrapper delegates writes to the underlying file but ignores
+    flush(), letting the OS buffer handle it at its own pace.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._fh = open(path, "w", encoding="utf-8")
+
+    def write(self, s: str) -> None:
+        self._fh.write(s)
+
+    def flush(self) -> None:
+        pass  # intentionally no-op — avoid blocking disk I/O in interact()
+
+    def close(self) -> None:
+        self._fh.close()
+
+
 class SSHConnectionError(Exception):
     """Raised when SSH connection fails."""
     pass
@@ -113,7 +135,7 @@ class SSHConnector:
             log_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             log_path = log_dir / f"{ts}.log"
-            logfile = open(str(log_path), "w", encoding="utf-8")
+            logfile = _LazyLogFile(str(log_path))
 
         self.child = pexpect.spawn(
             " ".join(cmd),
@@ -122,7 +144,7 @@ class SSHConnector:
             dimensions=(24, 80),
         )
         if logfile:
-            self.child.logfile_read = logfile  # child output only — no interact() stall
+            self.child.logfile_read = logfile
 
         try:
             self._handle_interactive_login()
@@ -201,5 +223,7 @@ class SSHConnector:
             except pexpect.ExceptionPexpect:
                 pass
         if self.child:
+            if self.child.logfile_read is not None:
+                self.child.logfile_read.close()
             self.child.close()
             self.child = None
