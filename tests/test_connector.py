@@ -1,4 +1,3 @@
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pexpect
 from sshman.core.connector import SSHConnector, SSHConnectionError
@@ -7,43 +6,34 @@ from sshman.core.session import Session
 
 class TestSSHConnectorBuildCommand:
     def test_build_command_minimal(self):
-        """build_command returns proper ssh command list."""
-        session = Session(name="test", host="10.0.0.1", user="root")
-        connector = SSHConnector(session)
-        cmd = connector.build_command(session)
+        connector = SSHConnector(Session(name="test", host="10.0.0.1", user="root"))
+        cmd = connector.build_command(connector.session)
         assert cmd[0] == "ssh"
         assert "root@10.0.0.1" in cmd
 
     def test_build_command_custom_port(self):
-        """Custom port is included in ssh args."""
-        session = Session(name="test", host="10.0.0.1", user="root", port=2222)
-        connector = SSHConnector(session)
-        cmd = connector.build_command(session)
+        connector = SSHConnector(Session(name="test", host="10.0.0.1", user="root", port=2222))
+        cmd = connector.build_command(connector.session)
         assert "-p" in cmd
         assert "2222" in cmd
 
     def test_build_command_identity_file(self):
-        """Identity file adds -i flag with expanded user path."""
         import os
-        session = Session(name="test", host="10.0.0.1", user="root", identity_file="~/.ssh/id_rsa")
-        connector = SSHConnector(session)
-        cmd = connector.build_command(session)
+        s = Session(name="test", host="10.0.0.1", user="root", identity_file="~/.ssh/id_rsa")
+        connector = SSHConnector(s)
+        cmd = connector.build_command(connector.session)
         idx = cmd.index("-i")
         assert cmd[idx + 1] == os.path.expanduser("~/.ssh/id_rsa")
 
     def test_build_command_keepalive(self):
-        """keepalive adds -o ServerAliveInterval."""
-        session = Session(name="test", host="10.0.0.1", user="root", keepalive=60)
-        connector = SSHConnector(session)
-        cmd = connector.build_command(session)
+        connector = SSHConnector(Session(name="test", host="10.0.0.1", user="root", keepalive=60))
+        cmd = connector.build_command(connector.session)
         assert "-o" in cmd
         assert "ServerAliveInterval=60" in cmd
 
     def test_build_command_default_port_not_in_args(self):
-        """Default port 22 is not added to args."""
-        session = Session(name="test", host="10.0.0.1", user="root", port=22)
-        connector = SSHConnector(session)
-        cmd = connector.build_command(session)
+        connector = SSHConnector(Session(name="test", host="10.0.0.1", user="root", port=22))
+        cmd = connector.build_command(connector.session)
         assert "ssh" == cmd[0]
 
 
@@ -51,7 +41,6 @@ class TestSSHConnectorConnect:
     @patch("sshman.core.connector.SSHConnector._handle_interactive_login")
     @patch("pexpect.spawn")
     def test_connect_calls_spawn(self, mock_spawn, mock_handle):
-        """connect spawns a pexpect child with SSH command."""
         mock_child = MagicMock()
         mock_spawn.return_value = mock_child
         session = Session(name="test", host="10.0.0.1", user="root")
@@ -63,8 +52,7 @@ class TestSSHConnectorConnect:
 
     @patch("sshman.core.connector.SSHConnector._handle_interactive_login")
     @patch("pexpect.spawn")
-    def test_connect_with_password_sends_password(self, mock_spawn, mock_handle):
-        """When session has password, connector stores it for _handle_interactive_login."""
+    def test_connect_with_password(self, mock_spawn, mock_handle):
         mock_child = MagicMock()
         mock_spawn.return_value = mock_child
         session = Session(name="test", host="10.0.0.1", user="root", password="secret123")
@@ -74,39 +62,28 @@ class TestSSHConnectorConnect:
 
 
 class TestHandleInteractiveLogin:
-    def test_login_sends_password_and_returns_without_consuming_output(self):
-        """After password is sent, function returns without calling
-        expect() for shell prompt — preserving MOTD/prompt in buffer."""
+    def test_login_sends_password_and_returns(self):
         session = Session(name="test", host="10.0.0.1", user="root", password="secret")
         connector = SSHConnector(session)
         mock_child = MagicMock()
         mock_child.isalive.return_value = True
-        # First expect() matches password prompt, then we return
         mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
         connector.child = mock_child
 
         connector._handle_interactive_login()
 
-        # Should have matched password prompt
         mock_child.expect.assert_called_once()
-        # Should have sent the password
         mock_child.sendline.assert_called_once_with("secret")
-        # Should have checked that child is alive
         mock_child.isalive.assert_called_once()
-        # CRITICAL: should NOT have called expect() a second time
-        # (which would consume MOTD/banners/prompt from the buffer)
-        assert mock_child.expect.call_count == 1
+        assert mock_child.expect.call_count == 1  # no second expect()
 
     def test_login_hostkey_accepted(self):
-        """Host key prompt is accepted with 'yes'."""
         session = Session(name="test", host="10.0.0.1", user="root", password="p")
         connector = SSHConnector(session)
         mock_child = MagicMock()
         mock_child.isalive.return_value = True
-        # First: host key prompt, second: password prompt
         mock_child.expect.side_effect = [
-            SSHConnector.PATTERN_HOSTKEY,
-            SSHConnector.PATTERN_PASSWORD,
+            SSHConnector.PATTERN_HOSTKEY, SSHConnector.PATTERN_PASSWORD,
         ]
         connector.child = mock_child
 
@@ -117,7 +94,6 @@ class TestHandleInteractiveLogin:
         assert mock_child.expect.call_count == 2
 
     def test_login_dead_after_password_raises(self):
-        """If child dies after sending password, raise SSHConnectionError."""
         session = Session(name="test", host="10.0.0.1", user="root", password="pw")
         connector = SSHConnector(session)
         mock_child = MagicMock()
@@ -134,9 +110,7 @@ class TestHandleInteractiveLogin:
 
     @patch("sshman.core.keyring.get_ssh_password")
     def test_login_falls_back_to_keychain(self, mock_get_ssh):
-        """When session.password is empty, check keychain for SSH password."""
-        session = Session(name="test", host="10.0.0.1", user="root",
-                          password="")  # no password in config
+        session = Session(name="test", host="10.0.0.1", user="root", password="")
         mock_get_ssh.return_value = "keychain-pw"
         connector = SSHConnector(session)
         mock_child = MagicMock()
@@ -151,9 +125,7 @@ class TestHandleInteractiveLogin:
 
     @patch("sshman.core.keyring.get_ssh_password", return_value=None)
     def test_login_keychain_empty_falls_back_to_config(self, mock_get_ssh):
-        """When keychain returns None, use session.password from config."""
-        session = Session(name="test", host="10.0.0.1", user="root",
-                          password="config-pw")
+        session = Session(name="test", host="10.0.0.1", user="root", password="config-pw")
         connector = SSHConnector(session)
         mock_child = MagicMock()
         mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
@@ -161,63 +133,40 @@ class TestHandleInteractiveLogin:
         connector.child = mock_child
 
         connector._handle_interactive_login()
-
-        # Should NOT send empty string — should fall back to config password
         mock_child.sendline.assert_called_once_with("config-pw")
 
 
-class TestAutoLogInteract:
-    def test_interact_without_auto_log_delegates_to_pexpect(self):
-        """When auto_log is off, call pexpect.interact()."""
+class TestAutoLog:
+    @patch("pexpect.spawn")
+    def test_auto_log_wraps_ssh_with_script(self, mock_spawn):
+        mock_child = MagicMock()
+        mock_spawn.return_value = mock_child
+        session = Session(name="test", host="10.0.0.1", user="root",
+                          password="pw", auto_log=True)
+        connector = SSHConnector(session)
+        connector._handle_interactive_login = MagicMock()
+        connector.connect()
+        spawn_args = mock_spawn.call_args[0][0]
+        assert "script" in spawn_args
+        assert "ssh" in spawn_args
+
+    @patch("pexpect.spawn")
+    def test_no_auto_log_direct_ssh(self, mock_spawn):
+        mock_child = MagicMock()
+        mock_spawn.return_value = mock_child
+        session = Session(name="test", host="10.0.0.1", user="root",
+                          password="pw", auto_log=False)
+        connector = SSHConnector(session)
+        connector._handle_interactive_login = MagicMock()
+        connector.connect()
+        spawn_args = mock_spawn.call_args[0][0]
+        assert "script" not in spawn_args
+        assert spawn_args == "ssh -o StrictHostKeyChecking=ask root@10.0.0.1"
+
+    def test_interact_delegates_to_pexpect(self):
         session = Session(name="test", host="10.0.0.1", user="root")
         connector = SSHConnector(session)
-        connector._log_path = None
         mock_child = MagicMock()
         connector.child = mock_child
-
         connector.interact()
         mock_child.interact.assert_called_once_with()
-
-    @patch("sys.stdout", new=MagicMock())
-    @patch("sys.stdin", new=MagicMock())
-    @patch("sshman.core.connector.SSHConnector._drain_pexpect_buffer")
-    @patch("select.select")
-    @patch("os.read")
-    @patch("os.write")
-    @patch("termios.tcgetattr")
-    @patch("termios.tcsetattr")
-    @patch("tty.setraw")
-    def test_interact_with_auto_log_own_loop(self, mock_setraw, mock_tcset,
-                                              mock_tcget, mock_write,
-                                              mock_read, mock_select,
-                                              mock_drain, tmp_path):
-        """auto_log: inner loop drains pexpect buffer before returning to select."""
-        import sys
-        sys.stdin.fileno.return_value = 0
-        sys.stdout.fileno.return_value = 1
-
-        session = Session(name="test", host="10.0.0.1", user="root",
-                          auto_log=True)
-        connector = SSHConnector(session)
-        log_path = tmp_path / "test.log"
-        connector._log_path = str(log_path)
-        mock_child = MagicMock()
-        mock_child.child_fd = 5
-        connector.child = mock_child
-
-        # select: child_fd readable × 2
-        mock_select.side_effect = [([5], [], []), ([5], [], [])]
-        # 1st iter: chunk1→chunk2→TIMEOUT. 2nd iter: EOF→break outer.
-        mock_child.read_nonblocking.side_effect = [
-            "chunk1\n", "chunk2\n", pexpect.TIMEOUT(""),
-            pexpect.EOF("done"),
-        ]
-
-        connector.interact()
-
-        log_content = log_path.read_text()
-        assert "chunk1" in log_content
-        assert "chunk2" in log_content
-
-        # Terminal should have received the data
-        mock_write.assert_any_call(1, b"chunk1\n")
