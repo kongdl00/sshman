@@ -111,50 +111,8 @@ class TestHandleInteractiveLogin:
         mock_child.sendline.assert_called_once_with("keychain-pw")
 
 
-class TestAutoLogInteract:
-    """auto_log interact(): raw os.read/os.write select loop."""
-
-    @patch("sys.stdin", new=MagicMock())
-    @patch("sys.stdout", new=MagicMock())
-    @patch("termios.tcgetattr")
-    @patch("termios.tcsetattr")
-    @patch("tty.setraw")
-    @patch("select.select")
-    @patch("os.write")
-    @patch("os.read")
-    @patch("os.close")
-    @patch("os.open")
-    def test_auto_log_raw_loop(self, mock_open, mock_close, mock_read,
-                                mock_write, mock_select, mock_setraw,
-                                mock_tcset, mock_tcget, tmp_path):
-        import sys
-        sys.stdin.fileno.return_value = 0
-        sys.stdout.fileno.return_value = 1
-
-        mock_open.return_value = 99  # fake log fd
-
-        session = Session(name="test", host="10.0.0.1", user="root",
-                          auto_log=True)
-        connector = SSHConnector(session)
-        mock_child = MagicMock()
-        mock_child.child_fd = 5
-        mock_child.buffer = ""  # no leftover from login
-        connector.child = mock_child
-        connector._log_fh = 99
-
-        # select: child_fd ready (once — inner loop handles drainage + EOF)
-        mock_select.return_value = ([5], [], [])
-        # drain: data → EOF (empty read = child closed)
-        mock_read.side_effect = [b"hello server\n", b""]
-
-        connector.interact()
-
-        # Verify data was teed to both stdout (fd 1) and log (fd 99)
-        mock_write.assert_any_call(1, b"hello server\n")
-        mock_write.assert_any_call(99, b"hello server\n")
-        mock_close.assert_called_once_with(99)
-
-    def test_interact_no_auto_log_delegates_to_pexpect(self):
+class TestInteract:
+    def test_interact_delegates_to_pexpect(self):
         session = Session(name="test", host="10.0.0.1", user="root")
         connector = SSHConnector(session)
         mock_child = MagicMock()
