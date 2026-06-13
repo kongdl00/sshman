@@ -215,21 +215,17 @@ class SSHConnector:
                     while True:
                         try:
                             data = os.read(child_fd, 65536)
-                        except BlockingIOError:
-                            break
                         except OSError:
-                            if drained:
-                                break  # child closed, no more data
-                            # EIO on first attempt → child died
-                            data = None
+                            # EAGAIN/EWOULDBLOCK: no data right now
+                            # EIO: child PTY closed
+                            break
                         if not data:
                             break
                         drained = True
                         os.write(stdout_fd, data)
                         os.write(log_fh, data)
                     if not drained:
-                        # No data AND no BlockingIOError → child is gone
-                        break
+                        break  # child_fd readable but no data → PTY closed
                 if stdin_fd in r:
                     try:
                         data = os.read(stdin_fd, 65536)

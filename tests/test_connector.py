@@ -142,11 +142,13 @@ class TestAutoLogInteract:
         connector.child = mock_child
         connector._log_fh = 99
 
-        # select: child_fd ready → read data → EOF
+        # select: child_fd ready, then child_fd ready again (for EOF)
         mock_select.side_effect = [([5], [], []), ([5], [], [])]
+        # drain loop (1st select): data → OSError(EAGAIN)
+        # drain loop (2nd select): OSError(EIO=child closed), drained stays False
         mock_read.side_effect = [
-            b"hello server\n",
-            b"",              # child EOF → break outer loop
+            b"hello server\n", OSError(35, "EAGAIN"),
+            OSError(5, "EIO"),
         ]
 
         connector.interact()
