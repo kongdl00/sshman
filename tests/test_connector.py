@@ -168,28 +168,29 @@ class TestHandleInteractiveLogin:
 
 class TestAutoLogInteract:
     def test_interact_with_auto_log_uses_output_filter(self, tmp_path):
-        """When auto_log is set, interact() passes output_filter to tee logs."""
+        """When auto_log is set, interact() tees child output to log file."""
         session = Session(name="test", host="10.0.0.1", user="root",
                           auto_log=True)
         connector = SSHConnector(session)
-        connector._log_path = str(tmp_path / "test.log")
+        log_path = tmp_path / "test.log"
+        connector._log_path = str(log_path)
         mock_child = MagicMock()
+
+        def fake_interact(**kwargs):
+            fn = kwargs.get("output_filter")
+            assert fn is not None
+            assert fn("line1\n") == "line1\n"
+            fn("line2\n")
+
+        mock_child.interact = fake_interact
         connector.child = mock_child
 
         connector.interact()
 
-        # Should have called interact() with an output_filter callable
-        mock_child.interact.assert_called_once()
-        call_kwargs = mock_child.interact.call_args[1]
-        assert "output_filter" in call_kwargs
-        assert callable(call_kwargs["output_filter"])
-
-        # Verify the filter writes to the log file
-        fn = call_kwargs["output_filter"]
-        result = fn("hello server\n")
-        assert result == "hello server\n"  # returns unchanged for stdout
-        log_content = Path(tmp_path / "test.log").read_text()
-        assert "hello server" in log_content
+        # Verify log file contains the teed output
+        log_content = log_path.read_text()
+        assert "line1" in log_content
+        assert "line2" in log_content
 
     def test_interact_without_auto_log_no_output_filter(self):
         """When auto_log is not set, interact() passes no output_filter."""

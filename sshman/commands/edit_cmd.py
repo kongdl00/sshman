@@ -17,14 +17,14 @@ from sshman.core.session import Session
 @click.option("--group", default=None, help="New session group")
 @click.option("--notes", default=None, help="New notes")
 @click.option("--keepalive", type=int, default=None, help="New keepalive interval")
-@click.option("--auto-log/--no-auto-log", default=None, help="Enable/disable terminal logging for this session")
+@click.option("--auto-log", type=click.Choice(["true", "false"]), default=None, help="Enable/disable terminal logging (true/false)")
 @click.option("--jumphost", default=None, help="Jumphost session name")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
 def edit_cmd(
     name: str, host: str | None, port: int | None, user: str | None,
     password: str | None, identity_file: str | None, tags: str | None,
     group: str | None, notes: str | None, keepalive: int | None,
-    auto_log: bool | None, jumphost: str | None,
+    auto_log: str | None, jumphost: str | None,
     keychain: bool, config_dir: str | None,
 ) -> None:
     """Edit an existing SSH session. Only specified fields are updated."""
@@ -75,7 +75,7 @@ def edit_cmd(
         session.keepalive = keepalive
         changed.append("keepalive")
     if auto_log is not None:
-        session.auto_log = auto_log
+        session.auto_log = auto_log == "true"
         changed.append("auto-log")
     if jumphost is not None:
         session.jumphost = jumphost

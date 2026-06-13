@@ -273,6 +273,30 @@ class TestEditCommand:
         assert result.exit_code != 0
         assert "not found" in result.output
 
+    @patch("sshman.commands._helpers.set_password")
+    @patch("sshman.commands._helpers.get_password", return_value=None)
+    @patch("sshman.commands.edit_cmd.ConfigManager")
+    def test_edit_auto_log_and_jumphost(self, mock_cm_class, mock_get,
+                                         mock_set, tmp_path):
+        """edit --auto-log true --jumphost bastion sets both fields."""
+        from sshman.core.session import Session
+        mock_cm = MagicMock()
+        session = Session(name="test", host="10.0.0.1", user="root")
+        mock_cm.find_session.return_value = session
+        mock_cm_class.return_value = mock_cm
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "edit", "test",
+            "--auto-log", "true",
+            "--jumphost", "bastion",
+            "--config-dir", str(tmp_path / ".sshman"),
+        ], input="masterpass\n")
+        assert result.exit_code == 0
+        assert session.auto_log is True
+        assert session.jumphost == "bastion"
+        mock_cm.save.assert_called_once()
+
 
 class TestConnectCommand:
     @patch("sshman.commands._helpers.set_password")
