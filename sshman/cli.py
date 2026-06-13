@@ -10,6 +10,7 @@ from sshman.commands.list_cmd import list_cmd
 from sshman.commands.remove_cmd import remove_cmd
 from sshman.commands.connect_cmd import connect_cmd
 from sshman.commands.edit_cmd import edit_cmd
+from sshman.commands.rename_cmd import rename_cmd
 from sshman.commands.clone_cmd import clone_cmd
 from sshman.commands.tunnel_cmd import tunnel_cmd
 from sshman.commands.batch_cmd import batch_cmd
@@ -37,6 +38,7 @@ main.add_command(list_cmd)
 main.add_command(remove_cmd)
 main.add_command(connect_cmd)
 main.add_command(edit_cmd)
+main.add_command(rename_cmd)
 main.add_command(clone_cmd)
 main.add_command(tunnel_cmd)
 main.add_command(batch_cmd)
