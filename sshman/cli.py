@@ -14,6 +14,7 @@ from sshman.commands.rename_cmd import rename_cmd
 from sshman.commands.clone_cmd import clone_cmd
 from sshman.commands.tunnel_cmd import tunnel_group
 from sshman.commands.exec_cmd import exec_cmd
+from sshman.commands.sftp_cmd import sftp_group
 from sshman.commands.batch_cmd import batch_cmd
 from sshman.commands.check_cmd import check_cmd
 from sshman.commands.import_cmd import import_cmd
@@ -43,6 +44,7 @@ main.add_command(rename_cmd)
 main.add_command(clone_cmd)
 main.add_command(tunnel_group)
 main.add_command(exec_cmd)
+main.add_command(sftp_group)
 main.add_command(batch_cmd)
 main.add_command(check_cmd)
 main.add_command(import_cmd)
