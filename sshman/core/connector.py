@@ -191,13 +191,7 @@ class SSHConnector:
         self.child.interact()
 
     def close(self) -> None:
-        """Close the SSH connection cleanly."""
-        if self.child and self.child.isalive():
-            self.child.sendline("exit")
-            try:
-                self.child.wait()
-            except pexpect.ExceptionPexpect:
-                pass
-        if self.child:
-            self.child.close()
+        """Close the SSH connection."""
+        if self.child is not None:
+            self.child.close(force=True)
             self.child = None

@@ -27,7 +27,7 @@ def connect_cmd(name: str, log: bool | None, no_tunnels: bool, config_dir: str |
     connector = SSHConnector(session, sessions=cm.sessions)
     try:
         click.echo(f"Connecting to {session.name} ({session.user}@{session.host}:{session.port})...")
-        connector.connect()
+        connector.connect(no_tunnels=no_tunnels)
         # Hand control to user
         connector.interact()
     except SSHConnectionError as e:
