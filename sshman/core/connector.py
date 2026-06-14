@@ -143,9 +143,10 @@ class SSHConnector:
 
         prompts_handled = 0
         while True:
-            # After the first prompt, drop the timeout to 3 s so we don't
-            # hang for 30 s waiting for a non-existent next prompt.
-            t = 3 if prompts_handled > 0 else -1  # -1 = use spawn default
+            # Adaptive timeout: default for first prompt, 1 s after that.
+            # SSH sends follow-up prompts (jumphost → target, or MFA)
+            # near-instantly, so 1 s is plenty.
+            t = 1 if prompts_handled > 0 else -1
             idx = self.child.expect(self.PATTERNS, timeout=t)
 
             if idx == self.PATTERN_HOSTKEY:
