@@ -66,7 +66,7 @@ class TestHandleInteractiveLogin:
         mock_child = MagicMock()
         mock_child.isalive.return_value = True
         mock_child.expect.side_effect = [
-            SSHConnector.PATTERN_PASSWORD, pexpect.TIMEOUT("done"),
+            SSHConnector.PATTERN_PASSWORD, SSHConnector.PATTERN_TIMEOUT,
         ]
         connector.child = mock_child
         connector._handle_interactive_login()
@@ -80,7 +80,7 @@ class TestHandleInteractiveLogin:
         mock_child.isalive.return_value = True
         mock_child.expect.side_effect = [
             SSHConnector.PATTERN_HOSTKEY, SSHConnector.PATTERN_PASSWORD,
-            pexpect.TIMEOUT("done"),
+            SSHConnector.PATTERN_TIMEOUT,
         ]
         connector.child = mock_child
         connector._handle_interactive_login()
@@ -110,7 +110,7 @@ class TestHandleInteractiveLogin:
         mock_child = MagicMock()
         mock_child.isalive.return_value = True
         mock_child.expect.side_effect = [
-            SSHConnector.PATTERN_PASSWORD, pexpect.TIMEOUT("done"),
+            SSHConnector.PATTERN_PASSWORD, SSHConnector.PATTERN_TIMEOUT,
         ]
         connector.child = mock_child
         connector._handle_interactive_login()
@@ -129,7 +129,7 @@ class TestHandleInteractiveLogin:
             SSHConnector.PATTERN_HOSTKEY,
             SSHConnector.PATTERN_PASSWORD,   # jumphost
             SSHConnector.PATTERN_PASSWORD,   # target
-            pexpect.TIMEOUT("done"),
+            SSHConnector.PATTERN_TIMEOUT,
         ]
         connector.child = mock_child
         connector._handle_interactive_login()
