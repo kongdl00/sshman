@@ -141,15 +141,21 @@ class SSHConnector:
         pw_idx = 0
         hostkeys_accepted = 0
 
+        prompts_handled = 0
         while True:
-            idx = self.child.expect(self.PATTERNS)
+            # After the first prompt, drop the timeout to 3 s so we don't
+            # hang for 30 s waiting for a non-existent next prompt.
+            t = 3 if prompts_handled > 0 else -1  # -1 = use spawn default
+            idx = self.child.expect(self.PATTERNS, timeout=t)
 
             if idx == self.PATTERN_HOSTKEY:
                 self.child.sendline("yes")
                 hostkeys_accepted += 1
+                prompts_handled += 1
                 continue
 
             elif idx in (self.PATTERN_PASSWORD, self.PATTERN_MFA, self.PATTERN_MFA_2):
+                prompts_handled += 1
                 if pw_idx < len(passwords):
                     password = passwords[pw_idx]
                     pw_idx += 1
