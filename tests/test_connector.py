@@ -59,29 +59,34 @@ class TestSSHConnectorConnect:
 
 
 class TestHandleInteractiveLogin:
-    def test_login_sends_password_and_returns(self):
+    def test_login_sends_password_then_timeout(self):
+        """PASSWORD → TIMEOUT (connected) — password sent once, then return."""
         session = Session(name="test", host="10.0.0.1", user="root", password="secret")
         connector = SSHConnector(session)
         mock_child = MagicMock()
         mock_child.isalive.return_value = True
-        mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
+        mock_child.expect.side_effect = [
+            SSHConnector.PATTERN_PASSWORD, pexpect.TIMEOUT("done"),
+        ]
         connector.child = mock_child
         connector._handle_interactive_login()
         mock_child.sendline.assert_called_once_with("secret")
-        assert mock_child.expect.call_count == 1
+        assert mock_child.expect.call_count == 2
 
-    def test_login_hostkey_accepted(self):
+    def test_login_hostkey_then_password_then_timeout(self):
         session = Session(name="test", host="10.0.0.1", user="root", password="p")
         connector = SSHConnector(session)
         mock_child = MagicMock()
         mock_child.isalive.return_value = True
         mock_child.expect.side_effect = [
             SSHConnector.PATTERN_HOSTKEY, SSHConnector.PATTERN_PASSWORD,
+            pexpect.TIMEOUT("done"),
         ]
         connector.child = mock_child
         connector._handle_interactive_login()
         mock_child.sendline.assert_any_call("yes")
         mock_child.sendline.assert_any_call("p")
+        assert mock_child.expect.call_count == 3
 
     def test_login_dead_after_password_raises(self):
         session = Session(name="test", host="10.0.0.1", user="root", password="pw")
@@ -103,12 +108,35 @@ class TestHandleInteractiveLogin:
         mock_get_ssh.return_value = "keychain-pw"
         connector = SSHConnector(session)
         mock_child = MagicMock()
-        mock_child.expect.return_value = SSHConnector.PATTERN_PASSWORD
         mock_child.isalive.return_value = True
+        mock_child.expect.side_effect = [
+            SSHConnector.PATTERN_PASSWORD, pexpect.TIMEOUT("done"),
+        ]
         connector.child = mock_child
         connector._handle_interactive_login()
         mock_get_ssh.assert_called_once_with("test")
         mock_child.sendline.assert_called_once_with("keychain-pw")
+
+    def test_jumphost_two_passwords(self):
+        """Jumphost pw + target pw → both sent in order."""
+        jh = Session(name="jump", host="10.0.0.1", user="ops", password="jpw")
+        tg = Session(name="target", host="10.0.1.1", user="root",
+                      password="tpw", jumphost="jump")
+        connector = SSHConnector(tg, sessions=[jh, tg])
+        mock_child = MagicMock()
+        mock_child.isalive.return_value = True
+        mock_child.expect.side_effect = [
+            SSHConnector.PATTERN_HOSTKEY,
+            SSHConnector.PATTERN_PASSWORD,   # jumphost
+            SSHConnector.PATTERN_PASSWORD,   # target
+            pexpect.TIMEOUT("done"),
+        ]
+        connector.child = mock_child
+        connector._handle_interactive_login()
+        mock_child.sendline.assert_any_call("yes")
+        mock_child.sendline.assert_any_call("jpw")
+        mock_child.sendline.assert_any_call("tpw")
+        assert mock_child.expect.call_count == 4
 
 
 class TestInteract:

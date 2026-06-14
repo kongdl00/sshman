@@ -113,22 +113,47 @@ class SSHConnector:
         return self.child
 
     def _handle_interactive_login(self) -> None:
-        """Process interactive prompts until authenticated."""
+        """Process interactive prompts until authenticated.
+
+        With a jumphost, SSH may ask for multiple passwords.  We never
+        return immediately after sending a password — instead we continue
+        the loop so additional password / MFA prompts are handled.
+        The loop exits when the child closes (EOF, auth failure) or no
+        prompt appears within the timeout (TIMEOUT = connected).
+        """
         assert self.child is not None
+
+        # Pre-collect passwords: jumphost first, then target
+        from sshman.core.keyring import get_ssh_password
+        passwords: list[str] = []
+
+        if self.session.jumphost:
+            jump = self._find_session(self.session.jumphost)
+            if jump:
+                jp = jump.password or get_ssh_password(jump.name)
+                if jp:
+                    passwords.append(jp)
+
+        pw = self.session.password or get_ssh_password(self.session.name)
+        if pw:
+            passwords.append(pw)
+
+        pw_idx = 0
+        hostkeys_accepted = 0
 
         while True:
             idx = self.child.expect(self.PATTERNS)
 
             if idx == self.PATTERN_HOSTKEY:
                 self.child.sendline("yes")
+                hostkeys_accepted += 1
                 continue
 
             elif idx in (self.PATTERN_PASSWORD, self.PATTERN_MFA, self.PATTERN_MFA_2):
-                password = self.session.password
-                if not password:
-                    from sshman.core.keyring import get_ssh_password
-                    password = get_ssh_password(self.session.name)
-                if not password:
+                if pw_idx < len(passwords):
+                    password = passwords[pw_idx]
+                    pw_idx += 1
+                else:
                     import getpass
                     password = getpass.getpass(
                         f"Password for {self.session.user}@{self.session.host}: "
@@ -141,15 +166,17 @@ class SSHConnector:
                         f"SSH connection lost after authentication — "
                         f"check credentials for {self.session.user}@{self.session.host}"
                     )
-                return
+                # Don't return — continue loop for next prompt
 
             elif idx == self.PATTERN_EOF:
                 raise SSHConnectionError(
-                    f"SSH connection to {self.session.host} ended unexpectedly"
+                    f"SSH connection to {self.session.host} ended unexpectedly\n"
+                    f"SSH output:\n{self.child.before}"
                 )
 
             elif idx == self.PATTERN_TIMEOUT:
-                raise pexpect.TIMEOUT("timed out waiting for SSH prompt")
+                # No prompt within timeout — we're connected
+                return
 
     def interact(self) -> None:
         """Hand control to the user for interactive shell session."""
