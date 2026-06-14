@@ -132,7 +132,7 @@ def put_cmd(name: str, local: str, remote: str, timeout: int,
     rc = _run_with_password(cmd, password, timeout)
     if rc == 0:
         click.echo("✓ Upload complete.")
-    raise click.Exit(code=rc)
+    sys.exit(rc)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ def get_cmd(name: str, remote: str, local: str, timeout: int,
     rc = _run_with_password(cmd, password, timeout)
     if rc == 0:
         click.echo("✓ Download complete.")
-    raise click.Exit(code=rc)
+    sys.exit(rc)
 
 
 # ---------------------------------------------------------------------------
