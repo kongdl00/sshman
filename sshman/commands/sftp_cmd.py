@@ -70,28 +70,29 @@ def _run_with_password(cmd: list[str], password: str | None, timeout: int):
 # CLI group
 # ---------------------------------------------------------------------------
 
-@click.group("sftp", invoke_without_command=True)
-@click.argument("name", required=False)
-@click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
-@click.pass_context
-def sftp_group(ctx: click.Context, name: str | None, config_dir: str | None) -> None:
+@click.group("sftp")
+def sftp_group() -> None:
     """SFTP file transfer & remote file listing.
 
     \b
-    Without a subcommand, opens an interactive SFTP shell:
-        sshman sftp <name>
-
-    \b
-    Subcommands:
+    Commands:
+        sshman sftp connect <name>      interactive SFTP shell
         sshman sftp put <name> <local> <remote>
         sshman sftp get <name> <remote> <local>
         sshman sftp ls  <name> <path>
     """
-    if ctx.invoked_subcommand is None:
-        if not name:
-            click.echo(ctx.get_help())
-            return
-        _interactive_sftp(name, config_dir)
+
+
+# ---------------------------------------------------------------------------
+# connect (interactive)
+# ---------------------------------------------------------------------------
+
+@sftp_group.command("connect")
+@click.argument("name")
+@click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
+def connect_cmd(name: str, config_dir: str | None) -> None:
+    """Open an interactive SFTP shell to a session."""
+    _interactive_sftp(name, config_dir)
 
 
 # ---------------------------------------------------------------------------
