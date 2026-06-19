@@ -222,8 +222,18 @@ def _interactive_sftp(name: str, config_dir: str | None) -> None:
     cmd.append(f"{session.user}@{session.host}")
 
     import pexpect
+    import signal
+    import shutil
+
+    def _sftp_dimensions():
+        try:
+            size = shutil.get_terminal_size()
+            return (size.lines, size.columns)
+        except Exception:
+            return (24, 80)
+
     child = pexpect.spawn(" ".join(cmd), encoding="utf-8",
-                          timeout=30, dimensions=(24, 80))
+                          timeout=30, dimensions=_sftp_dimensions())
 
     # Handle login (same patterns as SSHConnector)
     patterns = [
@@ -253,7 +263,23 @@ def _interactive_sftp(name: str, config_dir: str | None) -> None:
                 break
 
         if child.isalive():
-            child.interact()
+            old_handler = signal.getsignal(signal.SIGWINCH) if hasattr(signal, "SIGWINCH") else None
+
+            def _on_sigwinch(sig, frame):
+                try:
+                    size = shutil.get_terminal_size()
+                    child.setwinsize(size.lines, size.columns)
+                except Exception:
+                    pass
+
+            if hasattr(signal, "SIGWINCH"):
+                signal.signal(signal.SIGWINCH, _on_sigwinch)
+
+            try:
+                child.interact()
+            finally:
+                if hasattr(signal, "SIGWINCH") and old_handler is not None:
+                    signal.signal(signal.SIGWINCH, old_handler)
     except KeyboardInterrupt:
         pass
     finally:

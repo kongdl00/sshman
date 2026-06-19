@@ -1,10 +1,21 @@
 import os
+import signal
+import shutil
 import time
 from typing import Optional
 
 import pexpect
 
 from sshman.core.session import Session
+
+
+def _get_terminal_dimensions() -> tuple[int, int]:
+    """Return (rows, cols) for the current terminal, falling back to 80x24."""
+    try:
+        size = shutil.get_terminal_size()
+        return (size.lines, size.columns)
+    except Exception:
+        return (24, 80)
 
 
 class SSHConnectionError(Exception):
@@ -93,7 +104,7 @@ class SSHConnector:
             " ".join(cmd),
             encoding="utf-8",
             timeout=self.session.keepalive if self.session.keepalive > 0 else 30,
-            dimensions=(24, 80),
+            dimensions=_get_terminal_dimensions(),
         )
 
         try:
@@ -185,11 +196,37 @@ class SSHConnector:
                 # No prompt within timeout — we're connected
                 return
 
+    def setwinsize(self, rows: int, cols: int) -> None:
+        """Update the PTY window size (e.g. after terminal resize)."""
+        if self.child is not None:
+            self.child.setwinsize(rows, cols)
+
     def interact(self) -> None:
-        """Hand control to the user for interactive shell session."""
+        """Hand control to the user for interactive shell session.
+
+        Installs a SIGWINCH handler so the remote PTY tracks the local
+        terminal size when the user resizes the window.
+        """
         if self.child is None:
             raise SSHConnectionError("not connected — call connect() first")
-        self.child.interact()
+
+        old_handler = signal.getsignal(signal.SIGWINCH) if hasattr(signal, "SIGWINCH") else None
+
+        def _on_sigwinch(sig, frame):
+            try:
+                size = shutil.get_terminal_size()
+                self.setwinsize(size.lines, size.columns)
+            except Exception:
+                pass
+
+        if hasattr(signal, "SIGWINCH"):
+            signal.signal(signal.SIGWINCH, _on_sigwinch)
+
+        try:
+            self.child.interact()
+        finally:
+            if hasattr(signal, "SIGWINCH") and old_handler is not None:
+                signal.signal(signal.SIGWINCH, old_handler)
 
     def close(self) -> None:
         """Close the SSH connection."""
