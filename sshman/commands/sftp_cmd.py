@@ -1,5 +1,6 @@
 """sshman sftp — remote file transfer and directory listing."""
 
+import glob as glob_module
 import os
 import subprocess
 import tempfile
@@ -13,7 +14,49 @@ from sshman.core.keyring import get_ssh_password
 from sshman.commands._helpers import resolve_master_password
 
 
-def _build_scp_cmd(session, timeout: int, cm) -> tuple[list[str], str | None]:
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def _has_glob_chars(path: str) -> bool:
+    """Return True if *path* contains shell-style wildcard characters."""
+    return bool(set(path) & {"*", "?", "[", "]"})
+
+
+def _expand_local_sources(local: str) -> list[str]:
+    """Expand *local* into a sorted list of concrete paths.
+
+    - Glob wildcards (``*``, ``?``, ``[...]``) are expanded via :func:`glob.glob`.
+    - A plain path is returned as a one-element list (checked for existence).
+    - ``~`` is expanded via :func:`os.path.expanduser`.
+
+    Raises :class:`click.Abort` when a glob produces no matches or the
+    literal path does not exist.
+    """
+    expanded_local = os.path.expanduser(local)
+
+    if _has_glob_chars(expanded_local):
+        matches = sorted(glob_module.glob(expanded_local))
+        if not matches:
+            click.echo(f"No files match pattern: {local}", err=True)
+            raise click.Abort()
+        return matches
+
+    if not os.path.exists(expanded_local):
+        click.echo(f"Local path not found: {local}", err=True)
+        raise click.Abort()
+
+    return [expanded_local]
+
+
+def _sources_need_recursive(sources: list[str]) -> bool:
+    """Return True if any source is a directory (SCP needs ``-r``)."""
+    return any(os.path.isdir(s) for s in sources)
+
+
+def _build_scp_cmd(session, timeout: int, cm, *,
+                   recursive: bool = False) -> tuple[list[str], str | None]:
     """Build the base SCP / SSH command list, with jumphost & tunnels.
 
     Returns (cmd_list, password_or_None).
@@ -21,6 +64,8 @@ def _build_scp_cmd(session, timeout: int, cm) -> tuple[list[str], str | None]:
     cmd = ["scp", "-o", f"ConnectTimeout={timeout}",
            "-o", "StrictHostKeyChecking=accept-new",
            "-o", "BatchMode=no"]
+    if recursive:
+        cmd.insert(1, "-r")
     if session.port != 22:
         cmd.extend(["-P", str(session.port)])
     if session.identity_file:
@@ -101,16 +146,31 @@ def connect_cmd(name: str, config_dir: str | None) -> None:
 
 @sftp_group.command("put")
 @click.argument("name")
-@click.argument("local")
-@click.argument("remote")
+@click.argument("local", nargs=-1)
 @click.option("--timeout", type=int, default=60, help="Transfer timeout (seconds)")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
-def put_cmd(name: str, local: str, remote: str, timeout: int,
+def put_cmd(name: str, local: tuple[str, ...], timeout: int,
             config_dir: str | None) -> None:
-    """Upload a local file to the remote session.
+    """Upload files or directories to the remote session.
 
-    Example: sshman sftp put web-01 ./app.jar /opt/app.jar
+    \b
+    LOCAL accepts one or more paths.  The **last** argument is always
+    treated as the remote destination.  Shell globs may be quoted (so
+    sshman expands them) or left unquoted (the shell expands them).
+
+    \b
+        sshman sftp put web-01 ./app.jar             /opt/app.jar
+        sshman sftp put web-01 ./dist/               /opt/          # dir → -r
+        sshman sftp put web-01 ./*.log                /var/log/      # glob
+        sshman sftp put web-01 '*/target/sdp-*.jar'  /tmp/sdp-admin/ # quoted glob
     """
+    if len(local) < 2:
+        click.echo("Error: LOCAL and REMOTE arguments are required.\n"
+                   "Usage: sshman sftp put <name> <local> <remote>", err=True)
+        raise click.Abort()
+
+    *local_parts, remote = local  # last arg is always the remote destination
+
     config_dir_path = Path(config_dir) if config_dir else None
     cm = ConfigManager(config_dir=config_dir_path)
     resolve_master_password(cm)
@@ -120,15 +180,30 @@ def put_cmd(name: str, local: str, remote: str, timeout: int,
         click.echo(f"Session '{name}' not found.", err=True)
         raise click.Abort()
 
-    if not os.path.exists(local):
-        click.echo(f"Local file not found: {local}", err=True)
+    # Expand each local part (the user may have passed multiple
+    # already-expanded paths, or a single unexpanded glob pattern).
+    sources: list[str] = []
+    for lp in local_parts:
+        sources.extend(_expand_local_sources(lp))
+
+    if not sources:
+        click.echo("Error: no local files found to upload.", err=True)
         raise click.Abort()
 
-    cmd, password = _build_scp_cmd(session, timeout, cm)
-    cmd.append(local)
-    cmd.append(f"{session.user}@{session.host}:{remote}")
+    recursive = _sources_need_recursive(sources)
 
-    click.echo(f"Uploading {local} → {session.user}@{session.host}:{remote} ...")
+    cmd, password = _build_scp_cmd(session, timeout, cm, recursive=recursive)
+
+    # scp requires the remote destination to be directory-like when
+    # uploading multiple local sources.
+    cmd.extend(sources)
+    remote_dest = f"{session.user}@{session.host}:{remote}"
+    if len(sources) > 1 and not remote.endswith("/"):
+        remote_dest += "/"
+    cmd.append(remote_dest)
+
+    label = ", ".join(local_parts) if len(local_parts) <= 3 else f"{len(local_parts)} paths"
+    click.echo(f"Uploading {label} → {session.user}@{session.host}:{remote} ...")
     rc = _run_with_password(cmd, password, timeout)
     if rc == 0:
         click.echo("✓ Upload complete.")
