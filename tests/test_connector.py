@@ -1,5 +1,9 @@
+import errno
 from unittest.mock import patch, MagicMock
+
 import pexpect
+import pytest
+
 from sshman.core.connector import SSHConnector, SSHConnectionError
 from sshman.core.session import Session
 
@@ -140,10 +144,75 @@ class TestHandleInteractiveLogin:
 
 
 class TestInteract:
-    def test_interact_delegates_to_pexpect(self):
+    @patch("sshman.core.connector.sys.stdin")
+    @patch("sshman.core.connector.sys.stdout")
+    @patch("sshman.core.connector.termios")
+    @patch("sshman.core.connector.tty")
+    @patch("sshman.core.connector.select.select")
+    def test_interact_loop_exits_when_child_dies(
+        self, mock_select, mock_tty, mock_termios, mock_stdout, mock_stdin
+    ):
+        """Custom interact loop stops and reports when the child exits."""
+        mock_stdin.fileno.return_value = 0
+        mock_stdout.fileno.return_value = 1
+
         session = Session(name="test", host="10.0.0.1", user="root")
         connector = SSHConnector(session)
         mock_child = MagicMock()
+        mock_child.child_fd = 5
+        mock_child.encoding = "utf-8"
+        mock_child.buffer = ""
         connector.child = mock_child
+
+        # Child alive for two iterations, then dead.  The post-mortem
+        # report does *not* call isalive() again — it checks self.child.
+        mock_child.isalive.side_effect = [True, True, False]
+        mock_select.return_value = ([], [], [])  # no fds ready → timeout
+
         connector.interact()
-        mock_child.interact.assert_called_once_with()
+
+        assert mock_child.isalive.call_count == 3
+
+    @patch("sshman.core.connector.sys.stdin")
+    @patch("sshman.core.connector.sys.stdout")
+    @patch("sshman.core.connector.termios")
+    @patch("sshman.core.connector.tty")
+    @patch("sshman.core.connector.select.select")
+    @patch("sshman.core.connector.os.write")
+    def test_interact_prints_disconnect_on_eof(
+        self, mock_write, mock_select, mock_tty, mock_termios,
+        mock_stdout, mock_stdin
+    ):
+        """When child EOF is detected, disconnect message is sent to stderr."""
+        mock_stdin.fileno.return_value = 0
+        mock_stdout.fileno.return_value = 1
+
+        session = Session(name="test", host="10.0.0.1", user="root")
+        connector = SSHConnector(session)
+        mock_child = MagicMock()
+        mock_child.child_fd = 5
+        mock_child.encoding = "utf-8"
+        mock_child.buffer = ""
+        connector.child = mock_child
+
+        mock_child.isalive.return_value = True
+
+        with patch("sshman.core.connector.os.read", return_value=b""):
+            mock_select.return_value = ([5], [], [])  # child fd ready
+            connector.interact()
+
+        # The disconnect message is sent to stderr (fd may vary under pytest).
+        found = any(
+            len(c.args) >= 2
+            and isinstance(c.args[1], bytes)
+            and b"Connection closed" in c.args[1]
+            for c in mock_write.call_args_list
+        )
+        assert found, f"Expected disconnect message, got {mock_write.call_args_list}"
+
+    def test_interact_raises_when_not_connected(self):
+        """interact raises SSHConnectionError when child is None."""
+        session = Session(name="test", host="10.0.0.1", user="root")
+        connector = SSHConnector(session)
+        with pytest.raises(SSHConnectionError):
+            connector.interact()

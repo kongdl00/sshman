@@ -1,7 +1,12 @@
+import errno
 import os
+import select
 import signal
 import shutil
+import sys
+import termios
 import time
+import tty
 from typing import Optional
 
 import pexpect
@@ -65,6 +70,10 @@ class SSHConnector:
             cmd.extend(["-i", os.path.expanduser(session.identity_file)])
         if session.keepalive > 0:
             cmd.extend(["-o", f"ServerAliveInterval={session.keepalive}"])
+        else:
+            # Default keepalive so dead connections are detected promptly.
+            cmd.extend(["-o", "ServerAliveInterval=15",
+                        "-o", "ServerAliveCountMax=3"])
         cmd.extend(["-o", "StrictHostKeyChecking=ask"])
 
         if session.jumphost:
@@ -204,12 +213,15 @@ class SSHConnector:
     def interact(self) -> None:
         """Hand control to the user for interactive shell session.
 
-        Installs a SIGWINCH handler so the remote PTY tracks the local
-        terminal size when the user resizes the window.
+        Uses a custom select()-based loop (instead of pexpect's
+        ``interact()``) so we can periodically check whether the child
+        is still alive.  When the SSH connection drops the user sees a
+        clear message instead of a hung terminal.
         """
         if self.child is None:
             raise SSHConnectionError("not connected — call connect() first")
 
+        # -- SIGWINCH handler ------------------------------------------------
         old_handler = signal.getsignal(signal.SIGWINCH) if hasattr(signal, "SIGWINCH") else None
 
         def _on_sigwinch(sig, frame):
@@ -222,11 +234,90 @@ class SSHConnector:
         if hasattr(signal, "SIGWINCH"):
             signal.signal(signal.SIGWINCH, _on_sigwinch)
 
+        # -- raw terminal mode ----------------------------------------------
+        child_fd = self.child.child_fd
+        stdin_fd = sys.stdin.fileno()
+        stdout_fd = sys.stdout.fileno()
+
+        old_tty = termios.tcgetattr(stdin_fd)
+        tty.setraw(stdin_fd)
+
         try:
-            self.child.interact()
+            self._flush_and_interact_loop(child_fd, stdin_fd, stdout_fd)
         finally:
+            tty.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tty)
             if hasattr(signal, "SIGWINCH") and old_handler is not None:
                 signal.signal(signal.SIGWINCH, old_handler)
+
+    # ------------------------------------------------------------------
+    # Internal helpers for interact()
+    # ------------------------------------------------------------------
+
+    def _flush_and_interact_loop(
+        self, child_fd: int, stdin_fd: int, stdout_fd: int
+    ) -> None:
+        """Flush buffered child output, then enter the main I/O loop."""
+        encoding = self.child.encoding or "utf-8"
+        # Drain any buffered data already read by pexpect.
+        if hasattr(self.child, "buffer") and self.child.buffer:
+            data = self.child.buffer
+            self.child.buffer = self.child.string_type()
+            os.write(stdout_fd, data.encode(encoding, errors="replace"))
+
+        self._interact_loop(child_fd, stdin_fd, stdout_fd, encoding)
+
+    def _interact_loop(
+        self, child_fd: int, stdin_fd: int, stdout_fd: int, encoding: str
+    ) -> None:
+        """Core select()-based forwarding loop with liveness checks."""
+        alive_check_interval = 1.0  # seconds between isalive() checks
+
+        while self.child is not None and self.child.isalive():
+            try:
+                r, _, _ = select.select(
+                    [child_fd, stdin_fd], [], [], alive_check_interval
+                )
+            except InterruptedError:
+                continue
+            except (select.error, OSError):
+                break
+
+            # -- child → stdout ---------------------------------------------
+            if child_fd in r:
+                try:
+                    data = os.read(child_fd, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        # Linux-style EOF — child PTY closed.
+                        break
+                    raise
+                if data == b"":
+                    # BSD-style EOF.
+                    break
+                os.write(stdout_fd, data)
+
+            # -- stdin → child ----------------------------------------------
+            if stdin_fd in r:
+                try:
+                    data = os.read(stdin_fd, 4096)
+                except OSError:
+                    break
+                if data == b"":
+                    break
+                self.child.write(data.decode(encoding, errors="replace"))
+
+        # ---- post mortem --------------------------------------------------
+        if self.child is not None:
+            self._report_disconnect()
+
+    @staticmethod
+    def _report_disconnect() -> None:
+        """Print a visible disconnect message to stderr."""
+        msg = "\r\n*** Connection closed (remote host disconnected) ***\r\n"
+        try:
+            os.write(sys.stderr.fileno(), msg.encode())
+        except (OSError, ValueError):
+            pass
 
     def close(self) -> None:
         """Close the SSH connection."""
