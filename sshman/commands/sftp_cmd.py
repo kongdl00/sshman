@@ -82,8 +82,14 @@ def _build_scp_cmd(session, timeout: int, cm, *,
     return cmd, password
 
 
-def _run_with_password(cmd: list[str], password: str | None, timeout: int):
-    """Execute a command via subprocess, injecting SSH password if needed."""
+def _run_with_password(cmd: list[str], password: str | None, timeout: int) -> int:
+    """Execute ``scp`` / ``sftp``, streaming output to the terminal.
+
+    Returns the exit code.  The *timeout* is already baked into the
+    command line as ``ConnectTimeout`` — we deliberately do **not**
+    set a wall-clock timeout on the subprocess so large file transfers
+    are not killed prematurely.
+    """
     env = None
     askpass_script = None
     if password:
@@ -95,8 +101,9 @@ def _run_with_password(cmd: list[str], password: str | None, timeout: int):
                "SSHMAN_SSH_PASSWORD": password, "DISPLAY": "sshman:0"}
 
     try:
-        proc = subprocess.run(cmd, env=env, start_new_session=(password is not None),
-                              capture_output=True, text=True, timeout=timeout + 30)
+        # Stream stdout/stderr so the user sees scp's progress bar.
+        proc = subprocess.run(cmd, env=env,
+                              start_new_session=(password is not None))
     finally:
         if askpass_script:
             try:
@@ -104,10 +111,6 @@ def _run_with_password(cmd: list[str], password: str | None, timeout: int):
             except OSError:
                 pass
 
-    if proc.returncode != 0 and proc.stderr:
-        click.echo(click.style(proc.stderr.rstrip(), fg="yellow"), err=True)
-    if proc.stdout:
-        click.echo(proc.stdout.rstrip())
     return proc.returncode
 
 
