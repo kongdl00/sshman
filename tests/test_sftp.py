@@ -232,6 +232,26 @@ class TestBuildScpCmd:
         assert "-r" in cmd
         assert cmd[1] == "-r"  # immediately after 'scp'
 
+    def test_compress_flag_added(self):
+        from sshman.core.session import Session
+
+        cm = MagicMock()
+        cm.find_session.return_value = None
+
+        session = Session(name="test", host="10.0.0.1", user="root")
+        cmd, _ = _build_scp_cmd(session, 30, cm, compress=True)
+        assert "-C" in cmd
+
+    def test_compress_flag_absent_by_default(self):
+        from sshman.core.session import Session
+
+        cm = MagicMock()
+        cm.find_session.return_value = None
+
+        session = Session(name="test", host="10.0.0.1", user="root")
+        cmd, _ = _build_scp_cmd(session, 30, cm)
+        assert "-C" not in cmd
+
     def test_recursive_flag_absent_by_default(self):
         from sshman.core.session import Session
 

@@ -93,7 +93,8 @@ def _sources_need_recursive(sources: list[str]) -> bool:
 
 
 def _build_scp_cmd(session, timeout: int, cm, *,
-                   recursive: bool = False) -> tuple[list[str], str | None]:
+                   recursive: bool = False,
+                   compress: bool = False) -> tuple[list[str], str | None]:
     """Build the base SCP / SSH command list, with jumphost & tunnels.
 
     Returns (cmd_list, password_or_None).
@@ -101,6 +102,8 @@ def _build_scp_cmd(session, timeout: int, cm, *,
     cmd = ["scp", "-o", f"ConnectTimeout={timeout}",
            "-o", "StrictHostKeyChecking=accept-new",
            "-o", "BatchMode=no"]
+    if compress:
+        cmd.insert(1, "-C")
     if recursive:
         cmd.insert(1, "-r")
     if session.port != 22:
@@ -187,10 +190,11 @@ def connect_cmd(name: str, config_dir: str | None) -> None:
 @sftp_group.command("put")
 @click.argument("name")
 @click.argument("local", nargs=-1)
-@click.option("--timeout", type=int, default=60, help="Transfer timeout (seconds)")
+@click.option("--timeout", type=int, default=60, help="Connect timeout (seconds)")
+@click.option("--compress", "-C", is_flag=True, help="Enable SSH compression (2-5× faster for text files)")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
 def put_cmd(name: str, local: tuple[str, ...], timeout: int,
-            config_dir: str | None) -> None:
+            compress: bool, config_dir: str | None) -> None:
     """Upload files or directories to the remote session.
 
     \b
@@ -232,7 +236,8 @@ def put_cmd(name: str, local: tuple[str, ...], timeout: int,
 
     recursive = _sources_need_recursive(sources)
 
-    cmd, password = _build_scp_cmd(session, timeout, cm, recursive=recursive)
+    cmd, password = _build_scp_cmd(session, timeout, cm,
+                                   recursive=recursive, compress=compress)
 
     # scp requires the remote destination to be directory-like when
     # uploading multiple local sources.
@@ -273,10 +278,11 @@ def put_cmd(name: str, local: tuple[str, ...], timeout: int,
 @click.argument("name")
 @click.argument("remote")
 @click.argument("local")
-@click.option("--timeout", type=int, default=60, help="Transfer timeout (seconds)")
+@click.option("--timeout", type=int, default=60, help="Connect timeout (seconds)")
+@click.option("--compress", "-C", is_flag=True, help="Enable SSH compression")
 @click.option("--config-dir", default=None, help="Custom config directory", type=click.Path())
 def get_cmd(name: str, remote: str, local: str, timeout: int,
-            config_dir: str | None) -> None:
+            compress: bool, config_dir: str | None) -> None:
     """Download a remote file to the local machine.
 
     Example: sshman sftp get web-01 /var/log/nginx/access.log ./access.log
@@ -290,14 +296,16 @@ def get_cmd(name: str, remote: str, local: str, timeout: int,
         click.echo(f"Session '{name}' not found.", err=True)
         raise click.Abort()
 
-    cmd, password = _build_scp_cmd(session, timeout, cm)
+    cmd, password = _build_scp_cmd(session, timeout, cm, compress=compress)
     cmd.append(f"{session.user}@{session.host}:{remote}")
     cmd.append(local)
 
     click.echo(f"Downloading {session.user}@{session.host}:{remote} → {local} ...")
+    started = time.time()
     rc = _run_with_password(cmd, password, timeout)
+    elapsed = time.time() - started
     if rc == 0:
-        click.echo("✓ Download complete.")
+        click.echo(f"✓ Download complete ({_format_elapsed(elapsed)}).")
     sys.exit(rc)
 
 
