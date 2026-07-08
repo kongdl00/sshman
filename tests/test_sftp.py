@@ -6,11 +6,92 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from sshman.commands.sftp_cmd import (
-    _has_glob_chars,
-    _expand_local_sources,
-    _sources_need_recursive,
     _build_scp_cmd,
+    _collect_file_stats,
+    _expand_local_sources,
+    _format_elapsed,
+    _format_size,
+    _has_glob_chars,
+    _sources_need_recursive,
 )
+
+
+# ---------------------------------------------------------------------------
+# _format_size
+# ---------------------------------------------------------------------------
+
+
+class TestFormatSize:
+    def test_bytes(self):
+        assert _format_size(500) == "500.0 B"
+
+    def test_kilobytes(self):
+        assert _format_size(2048) == "2.0 KB"
+
+    def test_megabytes(self):
+        assert _format_size(300 * 1024 * 1024) == "300.0 MB"
+
+    def test_gigabytes(self):
+        assert _format_size(2.5 * 1024 * 1024 * 1024) == "2.5 GB"
+
+
+# ---------------------------------------------------------------------------
+# _format_elapsed
+# ---------------------------------------------------------------------------
+
+
+class TestFormatElapsed:
+    def test_seconds(self):
+        assert "s" in _format_elapsed(3.2)
+
+    def test_minutes(self):
+        result = _format_elapsed(125)
+        assert "m" in result
+        assert "s" in result
+
+
+# ---------------------------------------------------------------------------
+# _collect_file_stats
+# ---------------------------------------------------------------------------
+
+
+class TestCollectFileStats:
+    def test_empty_list(self):
+        count, total = _collect_file_stats([])
+        assert count == 0
+        assert total == 0
+
+    def test_single_file(self, tmp_path):
+        f = tmp_path / "app.jar"
+        f.write_text("hello world")
+        count, total = _collect_file_stats([str(f)])
+        assert count == 1
+        assert total == len("hello world")
+
+    def test_multiple_files(self, tmp_path):
+        (tmp_path / "a.txt").write_text("aaa")
+        (tmp_path / "b.txt").write_text("bbbb")
+        count, total = _collect_file_stats(
+            [str(tmp_path / "a.txt"), str(tmp_path / "b.txt")]
+        )
+        assert count == 2
+        assert total == 7
+
+    def test_directory_counted_but_not_sized(self, tmp_path):
+        d = tmp_path / "mydir"
+        d.mkdir()
+        count, total = _collect_file_stats([str(d)])
+        assert count == 1
+        assert total == 0  # dirs are not recursed
+
+    def test_mixed_files_and_dirs(self, tmp_path):
+        f = tmp_path / "f.txt"
+        f.write_text("abcd")
+        d = tmp_path / "d"
+        d.mkdir()
+        count, total = _collect_file_stats([str(f), str(d)])
+        assert count == 2
+        assert total == 4
 
 
 # ---------------------------------------------------------------------------

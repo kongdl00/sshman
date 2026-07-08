@@ -3,8 +3,10 @@
 import glob as glob_module
 import os
 import subprocess
-import tempfile
 import sys
+import tempfile
+import time
+
 import click
 from pathlib import Path
 
@@ -17,6 +19,41 @@ from sshman.commands._helpers import resolve_master_password
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+def _format_size(size: float) -> str:
+    """Format a byte count as a human-readable string."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} PB"
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as a human-readable duration."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}m {secs}s"
+
+
+def _collect_file_stats(sources: list[str]) -> tuple[int, int]:
+    """Return ``(file_count, total_bytes)`` for regular files in *sources*.
+
+    Directories are counted but their byte size is excluded (summing a
+    recursive tree would be too expensive for a pre-transfer summary).
+    """
+    file_count = 0
+    total_bytes = 0
+    for path in sources:
+        if os.path.isfile(path):
+            file_count += 1
+            total_bytes += os.path.getsize(path)
+        elif os.path.isdir(path):
+            file_count += 1  # count the directory itself
+    return file_count, total_bytes
 
 
 def _has_glob_chars(path: str) -> bool:
@@ -205,11 +242,26 @@ def put_cmd(name: str, local: tuple[str, ...], timeout: int,
         remote_dest += "/"
     cmd.append(remote_dest)
 
+    # ----- pre-transfer summary -----
+    file_count, total_bytes = _collect_file_stats(sources)
+    parts: list[str] = [f"{file_count} file{'s' if file_count != 1 else ''}"]
+    if total_bytes > 0:
+        parts.append(_format_size(total_bytes))
+    summary = ", ".join(parts)
+
     label = ", ".join(local_parts) if len(local_parts) <= 3 else f"{len(local_parts)} paths"
-    click.echo(f"Uploading {label} → {session.user}@{session.host}:{remote} ...")
+    click.echo(f"Uploading {label} → {session.user}@{session.host}:{remote}")
+    click.echo(f"  [{summary}]")
+
+    started = time.time()
     rc = _run_with_password(cmd, password, timeout)
+    elapsed = time.time() - started
+
     if rc == 0:
-        click.echo("✓ Upload complete.")
+        speed = ""
+        if elapsed > 0 and total_bytes > 0:
+            speed = f" @ {_format_size(total_bytes / elapsed)}/s"
+        click.echo(f"✓ Upload complete ({_format_elapsed(elapsed)}{speed}).")
     sys.exit(rc)
 
 
